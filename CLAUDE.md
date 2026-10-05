@@ -35,9 +35,12 @@ GID278 Landsat-8/Sentinel trace dates has a kept stage 2 image. The commands are
 **Then, in order:**
 
 1. (done) Stage 2. See C1d.
-2. C2: split `reference_polygon_new_ID/GID278.gmt` into `bed_GID278_01.gmt` / `_02.gmt`, one per
-   fjord wall, served at `/home/staff/enze/data1/ice_mask/GIMP/crop_bed/buffer_15`.
-3. C2c: audit the missing stage 3 helpers, and bring the gaps to the user before writing anything.
+2. **Waiting on the user (2026-10-05), see `IMPLEMENTATION_PLAN.md` "C2, evidence" and "C2c findings":**
+   (a) the published GID278 traces show no bedrock truncation, so the recommendation is no bed polygons
+   (truncation passes traces through) rather than deriving them; (b) which stage 3 driver to use (the
+   repo's, recommended, or the author's working copy); (c) which checkpoint (production logs used
+   `Mar8_2022`, not `May5`).
+3. (done) C2c. Tier B's "missing" helpers resolve once `data_processing/` is on `PATH`.
 4. C3: build the stage 3 image. Copy in `vendor/intersect/intersect.py` with the `np.Inf` sed, and
    choose the cutting polygon (the shrunk ROI or Tier A's hand-drawn `FrontDL3/polygon/cut_polygon.gmt`).
 5. C4: compare against the 505 published Sentinel traces and 188 Landsat-8 traces in
@@ -48,7 +51,8 @@ GID278 Landsat-8/Sentinel trace dates has a kept stage 2 image. The commands are
 rerun a download on the host outside the container, apply deviations 1 and 6 first: the restored
 file imports `geetools` and is not resumable.
 
-**Traps found so far, all exiting 0:** stage 2 silently skips glaciers with no Landsat-8. Stage 2
+**Traps found so far, all exiting 0:** stage 3 helpers called by bare name are found only through
+`PATH` (`Front_DL3/data_processing`), not through the working directory. stage 2 silently skips glaciers with no Landsat-8. Stage 2
 takes the Landsat-8 grid size from whichever scene lists first, which can be a partial edge clip
 (deviation 2 in `Dockerfile.preprocess`). A missing `gdal_merge.py` deletes every multi-scene date. Truncation without `intersect.py` crashes
 on import for every trace. `Dockerfile.preprocess` now fails its build if any required tool is

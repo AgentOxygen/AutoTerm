@@ -297,6 +297,20 @@ no-op without bedrock polygons.
       - **Published-date survival:** every published date has a kept `hist_eq/` image (Landsat8
         188/188, Sentinel2 255/255, Sentinel1 250/250). None was lost to partial-image removal.
       - Old Sentinel-only logs: `tier-c/old-sentinel-only/`.
+- [ ] **C2, evidence found 2026-10-05, awaiting the user's decision: the published GID278 traces show no
+      bedrock truncation.** All 693 Landsat8/Sentinel traces run the full ice margin: along the north
+      wall, around the terminus, and back along the south wall. Both ends stop on the
+      `GID_278_cutting_polygon_shrink` box, mostly its west edge at −49.794. 90% of endpoints are within
+      32 m of the box edge (p50 13 m); the farthest few are still at −49.79, and the single outlier is
+      L8 2014-06-24 (458 m, near the east edge). A fjord-wall cut would leave endpoints near the
+      terminus (about −49.65 to −49.70). Plot: `tier-c/c2-published-traces-GID278.png` (gitignored).
+      `truncate_termini.py` with no `bed_GID278_??.gmt` files at all: `ls` matches nothing,
+      `get_intersect` returns `(0, len)`, and the whole trace is written out (pass-through), provided
+      `intersect.py` imports. Tier B's empty `truncate_termini/` was the import crash, not the missing
+      polygons. **Consequence:** derived wall polygons would cut lateral margins that the published
+      traces keep. Not providing any bed polygon reproduces the published behaviour with no deviation.
+      The same evidence confirms that the author's cutting polygon for GID278 was the shrunk ROI, which is
+      also what `log_Jun13.txt` (MC dropout on GID278) shows.
 - [ ] C2. Derive `bed_GID278_??.gmt` from `reference_polygon_new_ID/GID278.gmt`, placed where
       `bed_path=/home/staff/enze/data1/ice_mask/GIMP/crop_bed/buffer_15` resolves (mount, no
       script edits). **This is a deliberate deviation.** Log it as a numbered, commented step in
@@ -336,7 +350,7 @@ no-op without bedrock polygons.
         and apply `sed 's/np\.Inf\b/np.inf/'` (line 90, NumPy ≥ 2 removed `np.Inf`, the same
         change as upstream's own `bb1348ba14`). Log both as numbered deviations. Verified on
         NumPy 2.3.5 with that `sed`: correct intersections, and the two-value unpack works.
-- [ ] C2c. **Re-audit the missing screening and downstream helpers from Tier B** (B4 list:
+- [x] C2c. **(Done 2026-10-05; see "C2c findings" below.)** **Re-audit the missing screening and downstream helpers from Tier B** (B4 list:
       `batch_cal_complexity.sh`, `batch_plot_result.sh`, `batch_cal_flowline_intersection_num.sh`,
       `batch_abandon_on_intersection.sh`, `batch_cal_termini_length.sh`, `remove_duplicate.sh`,
       `merge_two_calving2.sh` at its call-site path, `calculate_area2.sh`, `split_data_by_name.sh`,
@@ -344,6 +358,38 @@ no-op without bedrock polygons.
       screening, duplicate removal, the S1 offset, and error. Fix `repository-map.md`'s claim that
       "every script on a live code path is available". Bring decisions to the user before
       inventing any replacement.
+- [x] **C2c findings (2026-10-05), with decisions pending for the user:**
+      - **Tier B's "missing everywhere" helper list was wrong.** All the helpers except one exist in the
+        repo's own `data_processing/` (byte-identical to the author's, except plot labels in
+        `plot_hist.py` / `plot_time_series.sh`). The step scripts call them by bare name
+        (`bash batch_cal_complexity.sh`), and bash then searches `PATH`. The author's procedure (AutoTerm
+        Pipeline.docx, Step 3) puts `Front_DL3/data_processing` on `PATH`; Tier B didn't. The stage 3
+        image must do the same, as `Dockerfile.preprocess` already does.
+      - **Two driver versions.** The repo's `batch_inference_termini/batch_inference_plot_mv_figure_dir.sh`
+        (3 length/smoothness iterations, no flowline steps), and the author's working copy
+        `downloads/enze/Front_DL3/` (2 iterations, plus `batch_cal_flowline_intersection_num.sh` →
+        `batch_abandon_on_intersection.sh`, and inference commented out). The author's production logs
+        from March 2023 (`log_Mar2{3,4,5,8}_2023*.txt`; `Termini.zip` is dated 2023-03-29) all ran **3**
+        iterations, so the working copy's `{1..2}` is a later edit. The flowline-intersection steps
+        appear from 2023-03-24 onward (absent on 03-23). They need `batch_cal_flowline_intersection_num.sh`
+        (in no archive; the logs show it calls `calculate_flowline_intersection_num.sh <dir>
+        data1/flowline/manual/GID<n>_upsample.gmt`) **and** hand-made flowlines (in no archive). Without
+        them, `batch_abandon_on_intersection.sh` prints "no number of intersection" and abandons nothing.
+        No log records a GID278 driver run, so whether GID278 went through that screening is unknown.
+      - Step scripts present in both copies differ only in `ls | grep "GID"` vs `grep "-"`, which select
+        the same sensor directories here, and in the repo's `batch_inference.sh` hist_eq fallback. The
+        repo-only step scripts (`batch_remove_duplicate`, `batch_merge`, `batch_area_cal2`,
+        `batch_split_data_by_name`, `batch_plot_time_series`) appear in the March 2023 logs, so they
+        are the ones that ran.
+      - `batch_area_cal.sh` (called once after the area loop in both drivers) exists only as
+        `quantification_error_analysis/batch_area_cal.sh`, which has different arguments and `/home/zez`
+        paths. It never appears in the production logs, and the next step reads `batch_area_cal2.sh`'s
+        output. Missing → harmless no-op, the same as in production.
+      - **Checkpoint question (new):** every March 2023 production run used
+        `drn54_Mar8_2022_0.001_batch16_keep_augmentation.tar` (in `downloads/enze/Front_DL3/`, same size
+        as May5). `May5` appears only in the Sep/Oct 2023 logs, after publication. The paper says the
+        chosen learning rate was 2e-3; both of those are 1e-3, and the only drn54 2e-3 checkpoint
+        is `drn54_Apr13_2022_0.002`. Unresolved, raise at C3/C4.
 - [ ] C3. Run `batch_truncate_termini.sh` and the screening scripts
       (`batch_smoothness_truncate.sh` and downstream) against C1's imagery and C2's polygons.
       Confirm `truncate_termini/` is now non-empty and screening actually executes (not skipped).
