@@ -17,17 +17,25 @@
 # Base image carries the GDAL CLI and the osgeo python bindings in the system
 # interpreter, so `from osgeo import gdal` (gdal_merge_average.py) and `import torch`
 # (inference.py) live in the same python.
-FROM ghcr.io/osgeo/gdal:ubuntu-small-latest
+# Pinned base (2026-10-05). `ubuntu-small-latest` is a nightly GDAL dev build that is rebuilt
+# daily, so an unpinned build never gets the same stack twice. Pinning to the 3.13.3 release
+# digest (Ubuntu 26.04, Python 3.14.4) makes the CPU and GPU images reproducible and identical
+# apart from torch's CUDA variant.
+FROM ghcr.io/osgeo/gdal:ubuntu-small-3.13.3@sha256:64250faf833c06d4b21afce4c27190039ba7ab58d70f0eebc87cf77d929c0b40
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git gmt python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-# cu128: the target GPU (RTX 5070) is sm_120; no pre-2.7 torch wheel has kernels for it.
+# The target GPU (RTX 5070) is sm_120, which needs CUDA >= 12.8. cu130 is used because it carries
+# torch 2.14.0, the version the CPU image pins (the cu128 channel stops at torch 2.11). Host
+# requirement: an NVIDIA driver that supports CUDA 13.0 (R580 or newer).
 RUN pip install --no-cache-dir --break-system-packages \
-        torch torchvision --index-url https://download.pytorch.org/whl/cu128
+        torch==2.14.0 torchvision==0.29.0 --index-url https://download.pytorch.org/whl/cu130
+# Versions pinned to the stack the C3 smoke test ran on (2026-10-05).
 RUN pip install --no-cache-dir --break-system-packages \
-        rasterio shapely pyshp pyproj matplotlib scipy tensorboardX tqdm pillow
+        rasterio==1.5.1 shapely==2.1.2 pyshp==3.1.6 pyproj==3.8.0 matplotlib==3.11.2 scipy==1.18.1 \
+        tensorboardX==2.6.5 tqdm==4.70.1 pillow==12.3.0 numpy==2.3.5
 
 # 19 shell call sites run `python2 parameters.py`; the script itself is py3-clean.
 RUN ln -s /usr/bin/python3 /usr/local/bin/python2

@@ -207,5 +207,24 @@ not been made.
 
 ## Environment
 
-No NVIDIA driver is present in this sandbox, so `--gpus all` will not work. Use the submodule's CPU
-inference path for local verification.
+No NVIDIA driver is present in this sandbox, so `--gpus all` will not work here. Use the CPU images
+for local verification. The user's host has an **RTX 5070 (sm_120, needs CUDA >= 12.8 torch)**. The sandbox
+runs in direct mode, so the repo, `downloads/` and `tier-c/` are the same files on the host.
+
+- Long GPU runs (stage 3 inference) go through `./stage3-host.sh`, **run by the user on the host**. It
+  builds `frontdl3` (`Dockerfile.frontdl3`, torch 2.14.0+cu130, needs host driver R580+) and `autoterm-stage3-gpu` (`Dockerfile.stage3
+  --build-arg BASE=frontdl3 --build-arg DEVICE=cuda`), checks that the GPU is usable from Docker, runs the
+  driver, gives the outputs back to the host user, and checks them. `./stage3-host.sh --cpu` is the same
+  path on the CPU image, for testing in the sandbox.
+- **All inference images are pinned** (2026-10-05): base `ghcr.io/osgeo/gdal:ubuntu-small-3.13.3@sha256:6425...`
+  (Ubuntu 26.04, Python 3.14.4, GDAL 3.13.3), torch 2.14.0, and the other Python packages at fixed
+  versions. Never go back to `ubuntu-small-latest`: it is a nightly GDAL dev build, and a build on it
+  silently replaced the Tier A-verified image. The pre-pinning image the C3 smoke test ran on is
+  archived at `tier-c/images/autoterm-stage3-smoke-2026-10-05.tar` (`docker load -i`).
+- Sandbox Docker storage is a 9.7 GB volume. Prune the build cache before building large images.
+- The GPU base cannot be built in the sandbox: the CUDA torch wheels pull `pypi.nvidia.com`, which
+  the sandbox firewall does not resolve (`sbx policy allow network pypi.nvidia.com` on the host
+  would allow it).
+- CPU stage 3 throughput here is about 1.1 s per inference patch: about 3.5 min per Landsat-8
+  image (198 patches), roughly 75 h for all of GID278. Use the CPU only for smoke tests. Estimated for the
+  v1 code on the 5070 from the measured 982 GFLOP per patch: 6–8 h.

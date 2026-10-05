@@ -18,7 +18,11 @@
 #
 # Expected: reproduces the GPU baseline recorded in Dockerfile.frontdl3 — 28 patches, one 814-point
 # Jakobshavn Isbrae trace. Any drift from that count is a Tier A finding, not noise.
-FROM ghcr.io/osgeo/gdal:ubuntu-small-latest
+# Pinned base (2026-10-05). `ubuntu-small-latest` is a nightly GDAL dev build that is rebuilt
+# daily, so an unpinned build never gets the same stack twice. Pinning to the 3.13.3 release
+# digest (Ubuntu 26.04, Python 3.14.4) makes the CPU and GPU images reproducible and identical
+# apart from torch's CUDA variant.
+FROM ghcr.io/osgeo/gdal:ubuntu-small-3.13.3@sha256:64250faf833c06d4b21afce4c27190039ba7ab58d70f0eebc87cf77d929c0b40
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git gmt python3-pip \
@@ -28,9 +32,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # runtime (cublas, cudnn, nccl, ...) as dependencies, which is both unnecessary with no GPU to
 # target and large enough to exhaust a small build disk.
 RUN pip install --no-cache-dir --break-system-packages \
-        torch torchvision --index-url https://download.pytorch.org/whl/cpu
+        torch==2.14.0 torchvision==0.29.0 --index-url https://download.pytorch.org/whl/cpu
+# Versions pinned to the stack the C3 smoke test ran on (2026-10-05).
 RUN pip install --no-cache-dir --break-system-packages \
-        rasterio shapely pyshp pyproj matplotlib scipy tensorboardX tqdm pillow
+        rasterio==1.5.1 shapely==2.1.2 pyshp==3.1.6 pyproj==3.8.0 matplotlib==3.11.2 scipy==1.18.1 \
+        tensorboardX==2.6.5 tqdm==4.70.1 pillow==12.3.0 numpy==2.3.5
 
 # 19 shell call sites run `python2 parameters.py`; the script itself is py3-clean.
 RUN ln -s /usr/bin/python3 /usr/local/bin/python2

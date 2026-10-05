@@ -49,7 +49,7 @@ What the image does and why each piece is needed:
 | Decision | Reason |
 |---|---|
 | Base image `ghcr.io/osgeo/gdal:ubuntu-small-latest` | Puts the GDAL command line tools and the `osgeo` Python bindings in the same interpreter as `torch`. `gdal_merge_average.py` needs `from osgeo import gdal` and `inference.py` needs `import torch` |
-| PyTorch from the cu128 index | The target GPU is sm_120. No PyTorch wheel before 2.7 has kernels for it |
+| PyTorch 2.14.0 from the cu130 index | The target GPU is sm_120 (needs CUDA >= 12.8). cu130 carries the same torch version as the pinned CPU image; the cu128 channel stops at 2.11. Host driver R580+ |
 | Symlink `python2` to `python3` | The shell scripts invoke `python2 parameters.py`. The script itself is Python 3 clean |
 | Upstream pinned to commit `5684a19` | Keeps the baseline fixed if upstream moves |
 | `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1` | PyTorch 2.6 and later default `torch.load` to `weights_only=True`, which rejects the 2022 checkpoint |

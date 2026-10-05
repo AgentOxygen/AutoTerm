@@ -390,6 +390,37 @@ no-op without bedrock polygons.
         as May5). `May5` appears only in the Sep/Oct 2023 logs, after publication. The paper says the
         chosen learning rate was 2e-3; both of those are 1e-3, and the only drn54 2e-3 checkpoint
         is `drn54_Apr13_2022_0.002`. Unresolved, raise at C3/C4.
+- [ ] **C3, stage 3 image built and smoke-tested on CPU (2026-10-05). The full run is for the host GPU.**
+      - `Dockerfile.stage3` (decisions: the repo's driver, no bed polygons, shrunk cutting polygon,
+        `May5` first). The CPU build is `autoterm-stage3` (on `frontdl3-cpu`). The GPU build is
+        `--build-arg BASE=frontdl3 --build-arg DEVICE=cuda` (on `Dockerfile.frontdl3`, torch 2.14.0+cu130). That
+        build can't run in the sandbox: `pypi.nvidia.com` is not resolvable. `stage3-host.sh` builds
+        either one, runs a GPU preflight, runs the driver, chowns the outputs and checks them.
+      - **New trap, fixed in the image:** the CPU base lacked `bc`, which every screening abandonment test
+        pipes through. Without it, nothing would have been screened out, with exit 0. The build now fails
+        if `bc`, `gs`, GMT, the GDAL scripts or any `data_processing` helper is missing.
+      - **Smoke test** (`tier-c/smoke/`, gitignored): 6 images per sensor, all on dates with published traces,
+        64 min on 24 CPU cores. Every driver step ran. 24 images → 24 `in_polygon_gmt` traces →
+        24 truncated traces, **all identical to their inputs** (the pass-through, as decided) → 6
+        screened out (5 S1-A, 1 S1-D: with 6 samples the IQR window borrowed from S2 is very narrow) →
+        18 final traces. Points per trace L8 2,020–3,710 and S1/S2 1,562–2,748 (published medians
+        2,925 / ~2,150). Against the published trace for the same date, the median point distance is
+        36 m (median of per-trace means 105 m). These are raw, pre-offset traces from `May5`; not the C4 metric.
+      - Log noise, all expected or plot-only: 24 × `ls ... bed_GID278_??.gmt` (no bed polygons, by
+        design); `rm` of scratch dirs absent on a first run; `mv: cannot stat` when a trace already
+        moved by the smoothness test also fails the length test; one `find_min_max.py` IndexError
+        in `plot_time_series.sh` (the `accu/GID278_all.txt` it plots doesn't exist, so it affects a figure only).
+      - **Throughput:** 1.06 s per 960x720 patch on CPU; 198 patches per L8 image, 112 per Sentinel image;
+        GID278 is about 249k patches (245 PFLOP at 982 GFLOP per patch, measured with FlopCounterMode).
+        CPU about 73 h. **5070 with the v1 code: estimated 6–8 h** (batch 1, FP32, no `no_grad`, per-patch
+        GeoTIFF writes). Measure it on the first host run.
+      - **Pinned stack + host script verified (2026-10-05).** The inference images moved from the nightly
+        `ubuntu-small-latest` (GDAL 3.14.0dev, rebuilt daily) to `ubuntu-small-3.13.3@sha256:6425...`
+        with torch 2.14.0 and pinned Python packages. The GPU image is `cu130` (same torch; host driver
+        R580+). `./stage3-host.sh --cpu` on 2 images per sensor (`tier-c/smoke-script/`): built,
+        ran in 21 min, chowned outputs to uid 1000, and reported 8 traces → 7 final, with only the known
+        figure-only Traceback. **All 8 traces are bit-identical** to the smoke run on the old
+        stack, so CPU inference is deterministic and pinning changed no output.
 - [ ] C3. Run `batch_truncate_termini.sh` and the screening scripts
       (`batch_smoothness_truncate.sh` and downstream) against C1's imagery and C2's polygons.
       Confirm `truncate_termini/` is now non-empty and screening actually executes (not skipped).
