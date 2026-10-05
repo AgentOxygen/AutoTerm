@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=77", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "AutoTerm"
+dynamic = ["version"]
+authors = [
+  { name="Cameron Cummins", email="cameron.cummins@utexas.edu" },
+]
+description = "an automated pipeline for glacier terminus extraction using machine learning."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dependencies = [
+]
+classifiers = [
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Operating System :: OS Independent",
+]
+
+[tool.setuptools_scm]
+fallback_version = "0.0.0"
+
+[tool.setuptools]
+packages = ["autoterm"]
+
+[project.scripts]
+autoterm_cli = "autoterm.cli:main"
+
+[project.optional-dependencies]
+dev = ["AutoTerm[test,docs,sphinx,sphinx-autobuild]"]

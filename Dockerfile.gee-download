@@ -1,0 +1,105 @@
+# Runs GEE/batch_download_direct.py with the numbered deviations below (a dead-import removal and
+# resumable Sentinel downloads by default) to fetch
+# Sentinel-1/Sentinel-2 imagery for reproduction. This sandbox has no Google Earth Engine account,
+# so the actual download has to happen wherever GEE credentials exist — build and run this on that
+# host, not in here.
+#
+#   docker build -f Dockerfile.gee-download -t gee-download .
+#
+# Prerequisite, once, on the host that will run this (outside Docker):
+#   pip install earthengine-api && earthengine authenticate
+# Use that command specifically, not `gcloud auth login` / `gcloud auth application-default login`.
+# ee.Authenticate() checks for this file first and returns immediately if it's valid (verified
+# against earthengine-api's source: _valid_credentials_exist() is checked before anything else). In
+# a headless container it otherwise always falls through to auth_mode='gcloud' — confirmed in
+# earthengine-api's oauth.py, this happens regardless of whether the gcloud CLI is installed, since
+# the localhost-display check fails first — which shells out to gcloud and drags in full Google
+# Cloud project/ADC machinery (billing, quota project, "enable Compute Engine API" prompts) that
+# plain Earth Engine access does not need. `earthengine authenticate` avoids all of that.
+#
+#   docker run --rm \
+#     -v ~/.config/earthengine:/root/.config/earthengine:ro \
+#     -v "$PWD/gee-downloads:/data" \
+#     gee-download
+#
+# To own the downloaded files yourself rather than as root, run as your uid with a HOME it can
+# traverse, and mount the credentials under that HOME:
+#   --user "$(id -u):$(id -g)" -e HOME=/tmp/eehome \
+#   -v ~/.config/earthengine:/tmp/eehome/.config/earthengine:ro
+# Both parts are required. With --user alone, $HOME is "/" for a uid that has no passwd entry,
+# so the credentials are never found. The previously documented `-e HOME=/root` also fails,
+# because /root in this image is mode 700: a non-root uid can't traverse it and gets
+# PermissionError on the credentials file (verified 2026-09-30). Rootless Docker makes the
+# default root user unable to read a mode-600 credentials file owned by your uid, so --user
+# is effectively required there.
+#
+# Landsat-8 only (Tier C, C1c): select the derived script built by deviations 2-5 below, with
+#   -e GEE_SCRIPT=batch_download_landsat8.py
+# Run it with /data = the directory that already holds GID278_Sentinel-* (./GEE for this repo).
+# It writes GID278_Landsat-8/ next to those folders and never touches the Sentinel folders.
+#
+# Downloaded imagery lands directly under ./gee-downloads on the host, one folder per
+# <GID>_<Satellite> (e.g. GID278_Sentinel-2/), which is the layout batch_preprocess_images/ expects
+# next. Nothing is baked into the image except the script itself and one default glacier list.
+#
+# The image ships GID278 (Jakobshavn Isbrae) as the default target — see
+# GEE/Glacier_ID_list_download_1.txt. To download a different glacier or set of glaciers, drop your
+# own Glacier_ID_list_download_1.txt (format: "GID<n> xmin ymin xmax ymax", one per line — see
+# GEE/Glacier_ID_list.txt and docs/llm/conventions.md for the column order) into ./gee-downloads
+# before running; the entrypoint only supplies the default when the mounted directory doesn't
+# already have one.
+#
+# Cloud filtering: as committed, this script's only active blocks (Sentinel-1 A/D, Sentinel-2) do
+# apply a 60% cloud filter on Sentinel-2. See docs/llm/pitfalls.md — that contradicts the paper's
+# stated "no cloud filter" design and is left as-is deliberately; do not patch it out here.
+FROM python:3.12-slim
+
+# Only two real runtime dependencies: earthengine-api (the `ee` module) and requests. See deviation
+# 1 below for why geetools, imported by the script, is deliberately not installed.
+RUN pip install --no-cache-dir earthengine-api requests
+
+COPY GEE/batch_download_direct.py /opt/gee-download/batch_download_direct.py
+COPY GEE/Glacier_ID_list_download_1.txt /opt/gee-download/Glacier_ID_list_download_1.txt.default
+
+# --- deviations from the committed script, deliberately confined to this file ---
+# 1. `import geetools` is dead code here: every active download block in this script uses
+#    `image.getDownloadURL()` + `requests.get()`, never geetools' Drive-export API (that's what
+#    batch_download.py and batch_download_historical.py use instead). geetools pulls in a much
+#    heavier dependency tree for zero runtime behavior in this script, so it's dropped rather than
+#    installed — the same treatment Dockerfile.frontdl3 gives an unused scipy import (its
+#    deviation 1).
+RUN sed -i '/^import geetools$/d' /opt/gee-download/batch_download_direct.py
+# 6. Resumable Sentinel downloads (gee-resume-patch.py). Logged 2026-10-05: this edit was
+#    first made in place in GEE/batch_download_direct.py on 2026-09-30 and has since been moved here.
+#    The source file is back to the committed version. The GID278 Sentinel-1 A/D and Sentinel-2
+#    downloads were made with this patch; the Landsat-8 download was not affected (see below).
+#    In the three Sentinel blocks only, the patch makes two changes:
+#    - It skips images whose .tif already exists in the output folder, so an interrupted run can
+#      be restarted. The committed script also never finishes (deviation 5), so its first glacier
+#      repeats until stopped by hand; the skip makes the repeats harmless.
+#    - It iterates `aggregate_array('system:index')` and rebuilds each image from its collection
+#      ID, instead of `toList(size).get(i)`. The added `.select('HH')` / `.select(sel_bands)`
+#      repeat the collection's own `.select`. The set of images and their pixels are unchanged;
+#      only the order and the skipping differ.
+#    The Landsat-8 block is untouched, so batch_download_landsat8.py (deviations 2-5) keeps the
+#    original toList() loop. The transform runs on deviation 1's output. Its output is byte-identical
+#    to the file the 2026-09-30 in-place edit produced (checked with cmp, 2026-10-05).
+COPY gee-resume-patch.py /opt/gee-download/gee-resume-patch.py
+RUN python /opt/gee-download/gee-resume-patch.py /opt/gee-download/batch_download_direct.py \
+        > /tmp/resumable.py && mv /tmp/resumable.py /opt/gee-download/batch_download_direct.py
+# 2-5. Landsat-8-only derived script, /opt/gee-download/batch_download_landsat8.py, for Tier C
+#    C1c. gee-landsat8-patch.py does the transform and is the authoritative, numbered record. In
+#    summary: (2) uncomment the Landsat-8 block; (3) LANDSAT/LC08/C01/T1 → LANDSAT/LC08/C02/T1,
+#    because C01 is gone from GEE; (4) drop the Sentinel blocks so that already-consumed S1/S2
+#    inputs can't change; (5) restore the `readline()` at the end of the loop that f1df8ca dropped,
+#    without which the script never finishes. batch_download_direct.py itself is unchanged by this
+#    step and stays the default.
+COPY gee-landsat8-patch.py /opt/gee-download/gee-landsat8-patch.py
+RUN python /opt/gee-download/gee-landsat8-patch.py /opt/gee-download/batch_download_direct.py \
+        > /opt/gee-download/batch_download_landsat8.py
+
+COPY gee-download-entrypoint.sh /opt/gee-download/entrypoint.sh
+RUN chmod +x /opt/gee-download/entrypoint.sh
+
+WORKDIR /data
+ENTRYPOINT ["/opt/gee-download/entrypoint.sh"]

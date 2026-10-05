@@ -1,0 +1,63 @@
+# Minimum reproduction of the FrontDL3 inference pipeline (AutoTerm's segmentation stage).
+#
+# The source is cloned from GitHub, so the build context is unused:
+#   docker build -f Dockerfile.frontdl3 -t frontdl3 .
+#
+# The 326 MB checkpoint is mounted, not baked in. To keep the results, mount an
+# output dir and copy the traces out at the end:
+# docker run --rm --gpus all \
+# -v /home/oxygen/Downloads/drn54_May5_2022_0.001_batch16_keep_augmentation.tar:/Front_DL3/network.tar:ro \
+# -v "$PWD/out:/out" frontdl3 bash -c \
+# 'bash preparing_influence.sh /Front_DL3/train \
+# && bash exe_inference.sh /Front_DL3/polygon/cut_polygon.gmt network.tar \
+# && cp -r /Front_DL3/in_polygon_gmt /out/'
+#
+# Verified: 28 patches -> one terminus trace, 814 points, Jakobshavn Isbrae.
+#
+# Base image carries the GDAL CLI and the osgeo python bindings in the system
+# interpreter, so `from osgeo import gdal` (gdal_merge_average.py) and `import torch`
+# (inference.py) live in the same python.
+FROM ghcr.io/osgeo/gdal:ubuntu-small-latest
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git gmt python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# cu128: the target GPU (RTX 5070) is sm_120; no pre-2.7 torch wheel has kernels for it.
+RUN pip install --no-cache-dir --break-system-packages \
+        torch torchvision --index-url https://download.pytorch.org/whl/cu128
+RUN pip install --no-cache-dir --break-system-packages \
+        rasterio shapely pyshp pyproj matplotlib scipy tensorboardX tqdm pillow
+
+# 19 shell call sites run `python2 parameters.py`; the script itself is py3-clean.
+RUN ln -s /usr/bin/python3 /usr/local/bin/python2
+
+# Pinned to the current master ("update to python3", 2021-08-17) so the baseline
+# stays fixed if upstream moves.
+RUN git clone https://github.com/enzezhang/FrontDL3.git /Front_DL3 \
+ && git -C /Front_DL3 checkout -q 5684a190c95c9879aa9fad6dce8543a362a32de5
+WORKDIR /Front_DL3
+
+# --- deviations from upstream source, deliberately confined to this file ---
+# 1. scipy.ndimage.imread was removed in scipy 1.3. The import is unused.
+RUN sed -i '/from scipy.ndimage import imread/d' pytorch-deeplab-xception/datasetRS_Mar15.py
+# 2. para.ini points at the original author's home directory.
+RUN sed -i 's|^working_root *=.*|working_root =/Front_DL3|; \
+            s|^codes_dir *=.*|codes_dir =/Front_DL3/script|; \
+            s|^data_path=.*|data_path=/Front_DL3/train|' para.ini
+# 3. lr_scheduler.py line 38 indents with a tab in an otherwise space-indented block,
+#    which py3 rejects outright (TabError). inference.py imports it transitively.
+RUN sed -i 's|^\tprint ("iters per epoch|        print ("iters per epoch|' \
+        pytorch-deeplab-xception/utils/lr_scheduler.py
+# 4. exe_inference.sh pins the author's second GPU.
+RUN sed -i 's|^export CUDA_VISIBLE_DEVICES=1$|export CUDA_VISIBLE_DEVICES=0|' exe_inference.sh
+# 5. inference.py is a bare script with no __main__ guard, so a DataLoader worker
+#    re-imports and re-runs it under py3.14's forkserver default. AutoTerm's own
+#    copy of this script already passes --workers 0; match it.
+RUN sed -i '/^python /s|--workers 1|--workers 0|' exe_inference.sh
+
+# torch >=2.6 defaults torch.load(weights_only=True), which rejects this 2022 checkpoint.
+ENV TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
+
+CMD bash preparing_influence.sh /Front_DL3/train \
+ && bash exe_inference.sh /Front_DL3/polygon/cut_polygon.gmt network.tar

@@ -1,0 +1,57 @@
+# Tier A (docs/llm/reproduction-plan.md, IMPLEMENTATION_PLAN.md): CPU reproduction of the FrontDL3
+# inference stage, for sandboxes with no NVIDIA driver. Companion to Dockerfile.frontdl3, which is
+# the GPU baseline and stays unmodified.
+#
+# Builds from the FrontDL3/ submodule (a fork with the CPU-support and py3 fixes already committed,
+# see docs/llm/repository-map.md) instead of cloning upstream, so this file needs no sed patches for
+# anything the submodule already fixed. Build context must be the repo root, so the submodule
+# checkout is visible to COPY:
+#   docker build -f Dockerfile.frontdl3-cpu -t frontdl3-cpu .
+#
+# Run, checkpoint mounted rather than baked in, output dir mounted to collect results:
+# docker run --rm \
+# -v /path/to/drn54_May5_2022_0.001_batch16_keep_augmentation.tar:/Front_DL3/network.tar:ro \
+# -v "$PWD/out:/out" frontdl3-cpu bash -c \
+# 'bash preparing_influence.sh /Front_DL3/train \
+# && bash exe_inference.sh /Front_DL3/polygon/cut_polygon.gmt network.tar \
+# && cp -r /Front_DL3/in_polygon_gmt /out/'
+#
+# Expected: reproduces the GPU baseline recorded in Dockerfile.frontdl3 — 28 patches, one 814-point
+# Jakobshavn Isbrae trace. Any drift from that count is a Tier A finding, not noise.
+FROM ghcr.io/osgeo/gdal:ubuntu-small-latest
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git gmt python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# CPU wheels from the official index. Plain PyPI's default Linux wheel bundles the full CUDA
+# runtime (cublas, cudnn, nccl, ...) as dependencies, which is both unnecessary with no GPU to
+# target and large enough to exhaust a small build disk.
+RUN pip install --no-cache-dir --break-system-packages \
+        torch torchvision --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir --break-system-packages \
+        rasterio shapely pyshp pyproj matplotlib scipy tensorboardX tqdm pillow
+
+# 19 shell call sites run `python2 parameters.py`; the script itself is py3-clean.
+RUN ln -s /usr/bin/python3 /usr/local/bin/python2
+
+COPY FrontDL3/ /Front_DL3/
+WORKDIR /Front_DL3
+
+# --- deviations from the FrontDL3/ submodule, deliberately confined to this file ---
+# 1. Commit 6ec56ca made --cuda optional in inference.py (a bare `store_true` flag), but
+#    exe_inference.sh still passes --cuda unconditionally on the python invocation, so the CPU
+#    support that commit added is never reachable through the shell driver as committed. Strip the
+#    flag here rather than editing the submodule, so the deviation stays in one auditable place.
+RUN sed -i '/^python .*inference\.py/s/ --cuda / /' exe_inference.sh
+# 2. The checkpoint's tensors were saved off a CUDA device. torch.load with no map_location
+#    deserializes onto the origin device by default, which raises on a CPU-only machine. Line 78 of
+#    inference.py, the only torch.load call in this file.
+RUN sed -i "s|checkpoint = torch.load(args.resume)|checkpoint = torch.load(args.resume, map_location=torch.device('cpu'))|" \
+        pytorch-deeplab-xception/inference.py
+
+# torch >=2.6 defaults torch.load(weights_only=True), which rejects this 2022 checkpoint.
+ENV TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
+
+CMD bash preparing_influence.sh /Front_DL3/train \
+ && bash exe_inference.sh /Front_DL3/polygon/cut_polygon.gmt network.tar
