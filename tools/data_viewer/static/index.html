@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoTerm Viewer</title>
+<link rel="stylesheet" href="leaflet/leaflet.css">
+<style>
+  :root {
+    --bg: #15171a; --panel: #1d2024; --line: #2c3036; --text: #e6e8eb; --muted: #9aa1a9;
+    --accent: #4da3ff;
+    --raw: #ffd400; --final: #ff3b3b; --pub: #00e5ff; --cut: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  body { display: grid; grid-template-rows: auto 1fr; grid-template-columns: 330px 1fr; }
+  header { grid-column: 1 / 3; display: flex; gap: 12px; align-items: center; padding: 8px 12px;
+    background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 600; }
+  label.inline { display: flex; gap: 6px; align-items: center; color: var(--muted); }
+  select, button { background: #262a30; color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+    padding: 4px 8px; font: inherit; }
+  button { cursor: pointer; }
+  button.on { background: var(--accent); border-color: var(--accent); color: #0b1220; }
+  .seg { display: inline-flex; }
+  .seg button { border-radius: 0; }
+  .seg button:first-child { border-radius: 6px 0 0 6px; }
+  .seg button:last-child { border-radius: 0 6px 6px 0; }
+  aside { background: var(--panel); border-right: 1px solid var(--line); overflow: hidden;
+    display: flex; flex-direction: column; min-height: 0; }
+  section { padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+    margin: 0 0 6px; font-weight: 600; }
+  #listwrap { flex: 1; min-height: 120px; overflow-y: auto; padding: 0; }
+  #list { list-style: none; margin: 0; padding: 0; }
+  #list li { display: flex; gap: 8px; align-items: center; padding: 4px 12px; cursor: pointer;
+    border-bottom: 1px solid #22262b; }
+  #list li:hover { background: #24282e; }
+  #list li.sel { background: #23364d; }
+  #list .d { font-variant-numeric: tabular-nums; min-width: 78px; }
+  #list .s { color: var(--muted); flex: 1; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .chip { display: inline-flex; gap: 5px; align-items: center; padding: 2px 7px; border-radius: 10px;
+    border: 1px solid var(--line); cursor: pointer; user-select: none; font-size: 12px; }
+  .chip.off { opacity: .35; }
+  .layers label { display: flex; gap: 8px; align-items: center; padding: 2px 0; cursor: pointer; }
+  .sw { width: 18px; height: 3px; display: inline-block; }
+  .sw.dash { background: repeating-linear-gradient(90deg, currentColor 0 4px, transparent 4px 7px) !important; }
+  #info { color: var(--muted); font-size: 12px; word-break: break-all; }
+  #info b { color: var(--text); font-weight: 600; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
+  th, td { padding: 2px 4px; text-align: right; border-bottom: 1px solid #262a30; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 500; }
+  #map { background: #0d0f11; }
+  .leaflet-container { background: #0d0f11; font: inherit; }
+  #legend { position: absolute; right: 12px; bottom: 12px; z-index: 500; background: rgba(29,32,36,.92);
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: none; min-width: 180px; }
+  #legend .bar { height: 10px; border-radius: 3px; margin: 4px 0; }
+  #legend .ends { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
+  #status { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); z-index: 500;
+    background: rgba(29,32,36,.92); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px;
+    display: none; }
+  .hide { display: none !important; }
+  @media (max-width: 760px) {
+    body { grid-template-columns: 1fr; grid-template-rows: auto 45vh 1fr; }
+    aside { border-right: 0; border-bottom: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>AutoTerm Viewer</h1>
+  <label class="inline">Glacier <select id="gid"></select></label>
+  <label class="inline">Checkpoint <select id="ckpt"></select></label>
+  <span class="seg"><button id="m-date" class="on">Date view</button><button id="m-over">Overview</button></span>
+  <span id="pubnote" style="color:var(--muted)"></span>
+</header>
+<aside>
+  <section id="filters">
+    <h2>Filter</h2>
+    <label class="inline" style="margin-bottom:6px">Sensor <select id="sensor"></select></label>
+    <div class="chips" id="chips"></div>
+  </section>
+  <section id="listwrap"><ul id="list"></ul></section>
+  <section class="layers">
+    <h2>Layers</h2>
+    <label id="L-image"><input type="checkbox" data-l="image" checked> Satellite image</label>
+    <label><input type="checkbox" data-l="raw" checked> <span class="sw dash" style="color:var(--raw)"></span> Raw trace (inference)</label>
+    <label><input type="checkbox" data-l="final" checked> <span class="sw" style="background:var(--final)"></span> Final / screened trace</label>
+    <label><input type="checkbox" data-l="pub" checked> <span class="sw" style="background:var(--pub)"></span> Published trace</label>
+    <label><input type="checkbox" data-l="cut" checked> <span class="sw dash" style="color:var(--cut)"></span> Cutting polygon</label>
+  </section>
+  <section><h2>Selected</h2><div id="info">Nothing selected. Use ↑ ↓ to step through dates.</div></section>
+  <section><h2>Counts per sensor</h2><div id="counts"></div></section>
+</aside>
+<main id="map" style="position:relative">
+  <div id="status"></div>
+  <div id="legend"><div>Final traces by date</div><div class="bar" id="lgbar"></div>
+    <div class="ends"><span id="lg0"></span><span id="lg1"></span></div></div>
+</main>
+<script src="leaflet/leaflet.js"></script>
+<script>
+const STATUS = {
+  final:          ['Final', '#1a9850'],
+  screened:       ['Screened: smoothness / length', '#f46d43'],
+  area_screened:  ['Screened: area change', '#b15fd4'],
+  duplicate:      ['Duplicate removed', '#4f7fd0'],
+  no_final:       ['Traced, not in final set', '#d4b106'],
+  no_trace:       ['No trace produced', '#7d848c'],
+  image_rejected: ['Image rejected (stage 2)', '#4a4f55'],
+  not_run:        ['Stage 3 not run', '#a0a6ad'],
+};
+const VIRIDIS = ['#440154','#482878','#3e4989','#31688e','#26828e','#1f9e89','#35b779','#6ece58','#b5de2b','#fde725'];
+const $ = id => document.getElementById(id);
+const S = { gid: null, ckpt: '', mode: 'date', data: null, items: [], view: [], sel: -1,
+            sensor: 'all', status: new Set(Object.keys(STATUS)), pubAvail: false, fitted: false };
+let map = null, crsLat = null;
+const L_ = { image: L.layerGroup(), raw: L.layerGroup(), final: L.layerGroup(), pub: L.layerGroup(),
+             cut: L.layerGroup(), over: L.layerGroup() };
+const on = l => document.querySelector(`input[data-l="${l}"]`).checked;
+
+async function api(path) {
+  const r = await fetch('/api/' + path);
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+function flash(msg) { const s = $('status'); s.textContent = msg; s.style.display = msg ? 'block' : 'none'; }
+const ll = segs => segs.map(seg => seg.map(p => [p[1], p[0]]));
+const fmtDate = d => `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`;
+const satOf = sensor => sensor.replace(/^GID_\d+_/, '').replace(/-(\d)/, '$1').replace(/_[AD]$/, '');
+
+// Plain x/y map in lon/lat with the x axis scaled by cos(latitude), so shapes keep their true
+// proportions at high latitude. No web tiles, nothing fetched from outside.
+function ensureMap(lat0) {
+  if (map && Math.abs(lat0 - crsLat) < 1) return;
+  if (map) map.remove();
+  crsLat = lat0;
+  const k = Math.cos(lat0 * Math.PI / 180);
+  const crs = L.extend({}, L.CRS.Simple, { transformation: new L.Transformation(k, 0, -1, 0) });
+  map = L.map('map', { crs, minZoom: 4, maxZoom: 22, zoomSnap: 0.25, zoomDelta: 0.5,
+                       wheelPxPerZoomLevel: 90, attributionControl: false });
+  for (const g of Object.values(L_)) g.addTo(map);
+  S.fitted = false;
+}
+
+async function loadGlaciers() {
+  const j = await api('glaciers');
+  S.pubAvail = j.published;
+  $('pubnote').textContent = j.published ? '' : 'Published traces: Termini.zip not mounted';
+  $('gid').innerHTML = j.glaciers.map(g => `<option>${g}</option>`).join('');
+  if (!j.glaciers.length) { flash('No GID* folders in the mounted data directory'); return; }
+  await loadGlacier(j.glaciers[0], '');
+}
+
+async function loadGlacier(gid, ckpt) {
+  flash('Loading ' + gid + '…');
+  const j = await api(`glacier?gid=${gid}&ckpt=${encodeURIComponent(ckpt)}`);
+  S.gid = gid; S.ckpt = j.checkpoint; S.data = j; S.items = j.items;
+  $('gid').value = gid;
+  $('ckpt').innerHTML = j.checkpoints.length ? j.checkpoints.map(c => `<option>${c}</option>`).join('')
+                                             : '<option value="">(stage 3 not run)</option>';
+  $('ckpt').value = S.ckpt;
+  $('sensor').innerHTML = '<option value="all">All sensors</option>' +
+    j.sensors.map(s => `<option value="${s}">${s.replace(/^GID_\d+_/, '')}</option>`).join('');
+  $('sensor').value = j.sensors.includes(S.sensor) ? S.sensor : 'all';
+  S.sensor = $('sensor').value;
+  const lats = j.cutting.flatMap(c => c.segs.flat().map(p => p[1]));
+  ensureMap(lats.length ? lats.reduce((a, b) => a + b) / lats.length : 70);
+  drawCutting(); renderChips(); renderCounts(); flash('');
+  if (S.mode === 'over') return showOverview();
+  renderList(); select(S.view.length ? Math.max(0, Math.min(S.sel, S.view.length - 1)) : -1);
+}
+
+function drawCutting() {
+  L_.cut.clearLayers();
+  if (!on('cut')) return;
+  for (const c of S.data.cutting)
+    L.polyline(ll(c.segs), { color: '#fff', weight: 1.5, dashArray: '6 5', interactive: false }).addTo(L_.cut);
+  if (!S.fitted && S.data.cutting.length) {
+    map.fitBounds(L.featureGroup(L_.cut.getLayers()).getBounds().pad(0.08)); S.fitted = true;
+  }
+}
+
+function renderChips() {
+  const present = new Set(S.items.map(i => i.status));
+  $('chips').innerHTML = Object.entries(STATUS).filter(([k]) => present.has(k)).map(([k, [lab, col]]) =>
+    `<span class="chip ${S.status.has(k) ? '' : 'off'}" data-s="${k}"><span class="dot" style="background:${col}"></span>${lab}</span>`).join('');
+  for (const c of $('chips').children) c.onclick = () => {
+    const k = c.dataset.s; S.status.has(k) ? S.status.delete(k) : S.status.add(k);
+    renderChips(); renderList(); select(S.view.length ? 0 : -1);
+  };
+}
+
+function renderCounts() {
+  const c = S.data.counts, cols = ['images', 'final', 'screened', 'area_screened', 'duplicate', 'no_trace', 'image_rejected'];
+  const head = ['Sensor', 'Img', 'Final', 'Scr', 'Area', 'Dup', 'None', 'Rej'];
+  let tot = Object.fromEntries(cols.map(k => [k, 0]));
+  let rows = Object.entries(c).map(([s, v]) => {
+    cols.forEach(k => tot[k] += v[k] || 0);
+    return `<tr><td>${s.replace(/^GID_\d+_/, '')}</td>${cols.map(k => `<td>${v[k] || 0}</td>`).join('')}</tr>`;
+  }).join('');
+  rows += `<tr><td><b>Total</b></td>${cols.map(k => `<td><b>${tot[k]}</b></td>`).join('')}</tr>`;
+  $('counts').innerHTML = `<table title="Scr = smoothness/length screening, Area = area-change screening, None = no trace, Rej = image rejected in stage 2"><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr>${rows}</table>`;
+}
+
+function renderList() {
+  S.view = S.items.filter(i => (S.sensor === 'all' || i.sensor === S.sensor) && S.status.has(i.status));
+  $('list').innerHTML = S.view.map((i, n) =>
+    `<li data-n="${n}"><span class="dot" style="background:${STATUS[i.status][1]}" title="${STATUS[i.status][0]}"></span>` +
+    `<span class="d">${fmtDate(i.date)}</span><span class="s">${i.sensor.replace(/^GID_\d+_/, '')}</span></li>`).join('');
+  for (const li of $('list').children) li.onclick = () => select(+li.dataset.n);
+}
+
+let seq = 0;
+async function select(n) {
+  S.sel = n;
+  for (const li of $('list').children) li.classList.toggle('sel', +li.dataset.n === n);
+  const cur = $('list').children[n]; if (cur) cur.scrollIntoView({ block: 'nearest' });
+  for (const k of ['image', 'raw', 'final', 'pub']) L_[k].clearLayers();
+  if (n < 0) { $('info').textContent = 'No dates match the filters.'; return; }
+  const it = S.view[n], my = ++seq;
+  const q = `gid=${S.gid}&sensor=${it.sensor}&name=${it.name}`;
+  const ck = `&ckpt=${encodeURIComponent(S.ckpt)}`;
+  const [meta, raw, fin, pub] = await Promise.all([
+    api(`image?${q}&meta=1`).catch(() => null),
+    S.ckpt ? api(`trace?${q}${ck}&kind=raw`) : { segs: [] },
+    S.ckpt ? api(`trace?${q}${ck}&kind=final`) : { segs: [] },
+    S.pubAvail ? api(`published?gid=${S.gid}&date=${it.date}&sat=${satOf(it.sensor)}`) : { traces: [] },
+  ]);
+  if (my !== seq) return;  // a newer selection superseded this one
+  if (meta && on('image')) {
+    const [w, s, e, nn] = meta.bounds;
+    L.imageOverlay(`/api/image?${q}`, [[s, w], [nn, e]], { interactive: false }).addTo(L_.image);
+  }
+  if (on('pub')) for (const t of pub.traces)
+    L.polyline(ll(t.segs), { color: '#00e5ff', weight: 3, opacity: .9 }).bindTooltip('Published ' + fmtDate(t.date)).addTo(L_.pub);
+  if (on('raw') && raw.segs.length)
+    L.polyline(ll(raw.segs), { color: '#ffd400', weight: 1.6, dashArray: '5 4' }).bindTooltip('Raw trace').addTo(L_.raw);
+  if (on('final') && fin.segs.length && fin.path !== raw.path)
+    L.polyline(ll(fin.segs), { color: '#ff3b3b', weight: 1.6 }).bindTooltip(STATUS[it.status][0]).addTo(L_.final);
+  const npts = s => s.segs.reduce((a, x) => a + x.length, 0);
+  $('info').innerHTML = `<b>${fmtDate(it.date)}</b> · ${it.sensor.replace(/^GID_\d+_/, '')}<br>` +
+    `<span class="dot" style="background:${STATUS[it.status][1]}"></span> ${STATUS[it.status][0]}<br>` +
+    `raw ${npts(raw)} pts · final/screened ${npts(fin)} pts · published ${pub.traces.length ? npts(pub.traces[0]) + ' pts' : 'none'}<br>` +
+    `${it.name}${fin.path ? '<br>' + fin.path : ''}`;
+}
+
+async function showOverview() {
+  for (const k of ['image', 'raw', 'final', 'pub', 'over']) L_[k].clearLayers();
+  $('legend').style.display = 'none';
+  if (!S.ckpt) { flash('Stage 3 has not run for this glacier'); return; }
+  flash('Loading final traces…');
+  const [ov, pub] = await Promise.all([
+    api(`overview?gid=${S.gid}&ckpt=${encodeURIComponent(S.ckpt)}`),
+    S.pubAvail && on('pub') ? api(`published?gid=${S.gid}`) : { traces: [] }]);
+  flash('');
+  for (const t of pub.traces)
+    L.polyline(ll(t.segs), { color: '#00e5ff', weight: 1, opacity: .35, interactive: false }).addTo(L_.pub);
+  const tr = ov.traces.filter(t => S.sensor === 'all' || t.sensor === S.sensor);
+  if (!tr.length) { flash('No final traces for this selection'); return; }
+  const ts = tr.map(t => Date.UTC(+t.date.slice(0, 4), +t.date.slice(4, 6) - 1, +t.date.slice(6, 8)));
+  const t0 = Math.min(...ts), t1 = Math.max(...ts);
+  const col = v => VIRIDIS[Math.min(VIRIDIS.length - 1, Math.floor((t1 > t0 ? (v - t0) / (t1 - t0) : 0) * VIRIDIS.length))];
+  if (on('final')) tr.forEach((t, i) => L.polyline(ll(t.segs), { color: col(ts[i]), weight: 1.2, opacity: .85 })
+    .bindTooltip(`${fmtDate(t.date)} · ${t.sensor.replace(/^GID_\d+_/, '')}`).addTo(L_.over));
+  $('lgbar').style.background = `linear-gradient(90deg, ${VIRIDIS.join(',')})`;
+  $('lg0').textContent = fmtDate(tr.reduce((a, t) => t.date < a ? t.date : a, '99999999'));
+  $('lg1').textContent = fmtDate(tr.reduce((a, t) => t.date > a ? t.date : a, '00000000'));
+  $('legend').style.display = 'block';
+  $('info').textContent = `${tr.length} final traces (decimated to ≤300 points each for display).`;
+}
+
+function setMode(m) {
+  S.mode = m;
+  $('m-date').classList.toggle('on', m === 'date'); $('m-over').classList.toggle('on', m === 'over');
+  $('listwrap').classList.toggle('hide', m === 'over'); $('chips').classList.toggle('hide', m === 'over');
+  $('L-image').classList.toggle('hide', m === 'over');
+  if (m === 'over') return showOverview();
+  L_.over.clearLayers(); $('legend').style.display = 'none';
+  renderList(); select(S.view.length ? Math.max(0, Math.min(S.sel, S.view.length - 1)) : -1);
+}
+
+$('gid').onchange = e => { S.fitted = false; loadGlacier(e.target.value, ''); };
+$('ckpt').onchange = e => loadGlacier(S.gid, e.target.value);
+$('sensor').onchange = e => { S.sensor = e.target.value; S.mode === 'over' ? showOverview() : (renderList(), select(S.view.length ? 0 : -1)); };
+$('m-date').onclick = () => setMode('date');
+$('m-over').onclick = () => setMode('over');
+for (const cb of document.querySelectorAll('input[data-l]')) cb.onchange = () => {
+  if (cb.dataset.l === 'cut') return drawCutting();
+  S.mode === 'over' ? showOverview() : select(S.sel);
+};
+document.addEventListener('keydown', e => {
+  if (S.mode !== 'date' || e.target.tagName === 'SELECT' || !S.view.length) return;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); select(Math.min(S.sel + 1, S.view.length - 1)); }
+  if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); select(Math.max(S.sel - 1, 0)); }
+});
+loadGlaciers().catch(err => flash('Error: ' + err.message));
+</script>
+</body>
+</html>
