@@ -297,7 +297,7 @@ no-op without bedrock polygons.
       - **Published-date survival:** every published date has a kept `hist_eq/` image (Landsat8
         188/188, Sentinel2 255/255, Sentinel1 250/250). None was lost to partial-image removal.
       - Old Sentinel-only logs: `tier-c/old-sentinel-only/`.
-- [ ] **C2, evidence found 2026-10-05, awaiting the user's decision: the published GID278 traces show no
+- [x] **C2, decided 2026-10-05 (user-approved): no bedrock polygons. The published GID278 traces show no
       bedrock truncation.** All 693 Landsat8/Sentinel traces run the full ice margin: along the north
       wall, around the terminus, and back along the south wall. Both ends stop on the
       `GID_278_cutting_polygon_shrink` box, mostly its west edge at −49.794. 90% of endpoints are within
@@ -311,7 +311,7 @@ no-op without bedrock polygons.
       traces keep. Not providing any bed polygon reproduces the published behaviour with no deviation.
       The same evidence confirms that the author's cutting polygon for GID278 was the shrunk ROI, which is
       also what `log_Jun13.txt` (MC dropout on GID278) shows.
-- [ ] C2. Derive `bed_GID278_??.gmt` from `reference_polygon_new_ID/GID278.gmt`, placed where
+- [x] ~~C2. Derive `bed_GID278_??.gmt`~~ **Superseded by the no-polygon decision above.** Original task: from `reference_polygon_new_ID/GID278.gmt`, placed where
       `bed_path=/home/staff/enze/data1/ice_mask/GIMP/crop_bed/buffer_15` resolves (mount, no
       script edits). **This is a deliberate deviation.** Log it as a numbered, commented step in
       the build or run script, and flag in any results write-up that GID278 truncation used
@@ -358,7 +358,7 @@ no-op without bedrock polygons.
       screening, duplicate removal, the S1 offset, and error. Fix `repository-map.md`'s claim that
       "every script on a live code path is available". Bring decisions to the user before
       inventing any replacement.
-- [x] **C2c findings (2026-10-05), with decisions pending for the user:**
+- [x] **C2c findings (2026-10-05). Decided by the user the same day: the repo driver, May5 first, then Mar8:**
       - **Tier B's "missing everywhere" helper list was wrong.** All the helpers except one exist in the
         repo's own `data_processing/` (byte-identical to the author's, except plot labels in
         `plot_hist.py` / `plot_time_series.sh`). The step scripts call them by bare name
@@ -421,7 +421,17 @@ no-op without bedrock polygons.
         ran in 21 min, chowned outputs to uid 1000, and reported 8 traces → 7 final, with only the known
         figure-only Traceback. **All 8 traces are bit-identical** to the smoke run on the old
         stack, so CPU inference is deterministic and pinning changed no output.
-- [ ] C3. Run `batch_truncate_termini.sh` and the screening scripts
+      - **GPU verified on the host (2026-10-05).** `autoterm-stage3-gpu` built on the user's RTX 5070 and runs
+        about 20 patches/s (CPU: about 1/s). A single-image run (2014-08-27 L8) matched the CPU smoke trace:
+        3,162 of 3,320 points identical, the rest at most 7.31 m (one pixel) apart, from TF32. Full run
+        estimate: about 3.5 h of inference plus CPU post-processing, so 4–6 h. A first attempt was stopped:
+        `$IMG` was empty, so the single-image command mounted the whole Landsat folder.
+      - **Scratch disk:** each patch is an uncompressed 693 KB GeoTIFF, about 70 GB peak for GID278 inside the
+        container. The run command mounts `tier-c/scratch/{test_output,post_output}` from the host
+        (verified on one image: identical trace).
+      - **Viewer:** `tools/data_viewer/` (read-only web app) is built and API-tested on the smoke data, but
+        not yet rendered in a browser.
+- [ ] C3 (remaining). **The full GID278 GPU run on the host, then check the outputs.** Original wording: run `batch_truncate_termini.sh` and the screening scripts
       (`batch_smoothness_truncate.sh` and downstream) against C1's imagery and C2's polygons.
       Confirm `truncate_termini/` is now non-empty and screening actually executes (not skipped).
 - [ ] C4. Compare output against `Termini/GID<n>.shp` (from `downloads/Termini.zip`) on `Date` and
@@ -448,11 +458,10 @@ no-op without bedrock polygons.
 3. **Tier B done** — inference confirmed in the real deployment layout; truncation/screening no-op
    confirmed, with a more precise root cause than previously documented (missing `intersect`
    module, not just missing bedrock polygons).
-4. **Tier C in progress (as of 2026-10-05):** C1a–C1d done. Stage 2 is complete for all four sensors,
-   with Landsat-8 (deviation 2, seeded `para.ini`). C2b `intersect.py` vendored. Next: C2 (polygon
-   split) and C2c (helper audit), then C3. The `batch_download_direct.py` in-place edit is resolved:
-   the source is restored and the edit is `Dockerfile.gee-download` deviation 6. It touches only the
-   Sentinel blocks; the Landsat-8 download used the original loop.
+4. **Tier C in progress (as of 2026-10-05):** C1a–C1d, C2 (no polygons), C2b and C2c are done. C3:
+   the image is built, CPU smoke-tested, GPU-verified on one image. **Next: the user's full GPU run
+   (`May5`), then the output checks, then C4, then a `Mar8` run for the checkpoint comparison.** The user
+   has scoped work to reproducing inference only; training is parked.
 5. Tier D once C4 shows numbers in the expected range.
 
 ## Definition of done for Phase 1

@@ -6,6 +6,19 @@ is, what is already solved, and what actually blocks it.
 Revised after the author's working directory and the published data products arrived in
 `downloads/`. Most software obstacles are now closed.
 
+## Status update, 2026-10-05
+
+This plan was written before Tier C. What has changed since (details in `IMPLEMENTATION_PLAN.md`):
+
+- **The bedrock polygons are not a blocker for GID278.** The published traces were never truncated at
+  the fjord walls, and with `intersect.py` vendored, `truncate_termini.py` passes traces through when no
+  polygon exists. Screening then runs normally. The sections below about deriving polygons are
+  superseded for GID278.
+- Stage 1 (all four sensors) and stage 2 are done for GID278. `Dockerfile.stage3` runs the full
+  stage 3 driver; the CPU smoke test passed every step, and the full GPU run is next.
+- The "missing helper" scripts Tier B reported were a `PATH` problem, not missing files.
+- Open question for C4: the production logs used the `Mar8_2022` checkpoint, not `May5_2022`.
+
 ## Headline
 
 **The container is the easy part. One data asset and one data source remain.**

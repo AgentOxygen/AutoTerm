@@ -6,11 +6,11 @@ How to execute code in this repository and how to check that a change worked.
 
 | Target | Runnable | How |
 |---|---|---|
-| FrontDL3 inference stage | Yes | `Dockerfile.frontdl3`, described below |
+| FrontDL3 inference stage | Yes | `Dockerfile.frontdl3` (GPU, cu130) or `Dockerfile.frontdl3-cpu`, described below |
 | Individual `data_processing/` Python helpers | Yes | Direct invocation with `--input` and `--output` |
-| Root `batch_inference_termini/` stage 3 driver | Partly | Scripts and layout are now available in `downloads/enze/Front_DL3/`. Truncation and screening still blocked on bedrock polygons |
-| Stage 2 preprocessing | Partly | `build_folder_structure.sh` is available. Needs `gdal_contrast_stretch`, which the container does not install |
-| Stage 1 download | Partly | Needs a Google Earth Engine account. ROI boxes for all 295 glaciers are in `downloads/Glacier Identification.csv` |
+| Root `batch_inference_termini/` stage 3 driver | **Yes** | `Dockerfile.stage3`. See "Stage 3 in a container" below. CPU smoke test verified every step; the full GID278 GPU run is pending |
+| Stage 2 preprocessing | **Yes** | `Dockerfile.preprocess` (ubuntu:18.04, which still packages `gdal_contrast_stretch`). Done for GID278, all four sensors |
+| Stage 1 download | Yes, on the host | Needs Google Earth Engine credentials, so it runs bare-metal (`.env/` venv) or through `Dockerfile.gee-download`. Earth Engine auth fails inside the sandbox. ROI boxes for all 295 glaciers are in `downloads/Glacier Identification.csv` |
 | Training | Partly | The TermPicks label set is in `downloads/label_shape_TermPicks.zip`. Source imagery is not included, and the paper's run took 120 GB of GPU memory over 5 to 7 days |
 | `src/autoterm` | No | Stub, see `refactor-target.md` |
 
@@ -115,6 +115,63 @@ applies.
    names with `cut -d '_'`, so a renamed output silently corrupts downstream metadata rather than
    erroring.
 
+## Stage 3 in a container
+
+`Dockerfile.stage3` assembles the author's working-root layout at `/home/staff/enze/Front_DL3` and
+runs the repo's `batch_inference_termini/` scripts unmodified. Build it on the GPU or the CPU base:
+
+```bash
+docker build -f Dockerfile.frontdl3 -t frontdl3 .                      # GPU base (cu130, host driver R580+)
+docker build -f Dockerfile.stage3 --build-arg BASE=frontdl3 --build-arg DEVICE=cuda -t autoterm-stage3-gpu .
+docker build -f Dockerfile.frontdl3-cpu -t frontdl3-cpu .              # CPU base
+docker build -f Dockerfile.stage3 -t autoterm-stage3 .
+```
+
+**Full run** (all sensors, then truncation, screening, duplicates, the S1 offset and error). Mount
+the scratch directories on the host: each patch is an uncompressed 693 KB GeoTIFF, about 70 GB at
+peak for GID278.
+
+```bash
+mkdir -p tier-c/scratch/test_output tier-c/scratch/post_output
+docker run --rm --gpus all \
+  -v "$PWD/tier-c/data:/home/staff/enze/data1/Greenland_front_Mapping/data" \
+  -v "$PWD/downloads/<checkpoint>.tar:/home/staff/enze/Front_DL3/<checkpoint>.tar:ro" \
+  -v "$PWD/tier-c/scratch/test_output:/home/staff/enze/Front_DL3/test_output" \
+  -v "$PWD/tier-c/scratch/post_output:/home/staff/enze/Front_DL3/post_output" \
+  autoterm-stage3-gpu bash batch_inference_plot_mv_figure_dir.sh <checkpoint>.tar 2>&1 | tee tier-c/stage3.log
+```
+
+`./stage3-host.sh [--cpu] [checkpoint] [data_dir]` wraps the builds, a GPU preflight, the run, a
+`chown`, and an output-count check.
+
+**Single image, inference only** (about 10 s on the RTX 5070, 4 min on the sandbox CPU). `${IMG:?}`
+stops an empty variable from mounting the whole folder:
+
+```bash
+IMG=20140827_Landsat8_GID278_stretch.tif
+docker run --rm --gpus all \
+  -v "$PWD/tier-c/data/GID278/GID_278_Landsat-8/upsample/${IMG:?set IMG first}:/in/$IMG:ro" \
+  -v "$PWD/tier-c/data/GID278/polygon:/polygon:ro" \
+  -v "$PWD/downloads/<checkpoint>.tar:/home/staff/enze/Front_DL3/network.tar:ro" \
+  -v "$PWD/tier-c/single:/out" \
+  autoterm-stage3-gpu bash -c 'bash preparing_influence.sh /in && bash exe_inference.sh /polygon/GID_278_cutting_polygon_shrink.gmt network.tar && cp -r in_polygon_gmt /out/'
+```
+
+**Checks after a run** (the exit code means nothing here):
+
+- Per sensor, `upsample/*.tif` should equal `in_polygon_gmt/<ckpt>/*.gmt` (one trace per image).
+- `truncate_termini/<ckpt>/` plus `abandon/` should hold every trace. Truncation is a pass-through for
+  GID278 (no bed polygons), so truncated traces equal their inputs.
+- `GID<n>/truncate_termini/<ckpt>/` holds the final set.
+- Grep the log for `command not found`, `No module named`, `unary operator expected` and `CUDA error`.
+  The expected noise is `ls … bed_GID*_??.gmt`, `rm`/`mkdir` messages about the scratch mounts, and one
+  `find_min_max.py` IndexError (figure only).
+- Look at the result in `tools/data_viewer` (its README has the commands).
+
+**Measured:** CPU 1.06 s per 960x720 patch; RTX 5070 about 20 patches/s. 198 patches per Landsat-8
+image and 112 per Sentinel image, about 249k for GID278. Each patch costs 982 GFLOP (FlopCounterMode). GPU
+and CPU traces agree to within one pixel (TF32); `-e NVIDIA_TF32_OVERRIDE=0` makes them identical.
+
 ## Failure modes that do not raise
 
 These produce empty or wrong output with a success exit code. Check for them explicitly.
@@ -127,6 +184,10 @@ These produce empty or wrong output with a success exit code. Check for them exp
 | `parameters.py` cannot find a key | Empty string captured into a shell variable, used as a path |
 | File name has the wrong number of underscore fields | Wrong date or sensor recorded, no error |
 | `sed -i 1,11d` on a GMT file whose header length changed | Data rows removed or header lines retained |
+| `bc` missing from the image | Every screening comparison errors, so nothing is abandoned |
+| `data_processing/` not on `PATH` | Step scripts can't find helpers called by bare name; screening and merging silently skip |
+| Docker storage full during inference | Patch GeoTIFF writes fail, and traces are built from missing patches |
+| Empty shell variable in a `-v` path | The whole parent folder is mounted (e.g. all 353 images instead of one) |
 
 The submodule's `exe_inference.sh` adds `set -euo pipefail`, which converts some of these into real
 failures. The root copy does not have it.

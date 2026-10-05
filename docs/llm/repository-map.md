@@ -59,6 +59,11 @@ lines**, so neither blocks any live code path.
 
 Net effect: **every script on a live code path is now available.** The author's directory closed
 the last real gap, `batch_plot_truncate_MC_dropout.sh`, which previously blocked stage 4 plotting.
+They are only found if `data_processing/` is on `PATH`, because the step scripts call them by bare name
+(see `pitfalls.md`). Two versions of the stage 3 driver exist: the repo's
+`batch_inference_termini/batch_inference_plot_mv_figure_dir.sh`, which is the one used, and the author's later
+working copy. The working copy adds flowline-intersection screening, which needs
+`batch_cal_flowline_intersection_num.sh` and hand-made flowlines; neither is in any archive.
 
 Prefer `downloads/enze/Front_DL3/` over the submodule when a script exists in both, since that copy
 is the one the published results were produced with.
@@ -97,14 +102,21 @@ Do not delete these. Different entry points import different ones.
 |---|---|
 | `manuscript.md` | The published paper. Read for intent |
 | `AutoTerm Pipeline.docx` | The author's operating procedure. Read for the intended setup sequence |
-| `Dockerfile.frontdl3` | Working container build of the inference stage. Verified |
+| `Dockerfile.frontdl3` | GPU inference image (cu130, pinned). Verified on an RTX 5070 |
+| `Dockerfile.frontdl3-cpu` | CPU inference image, built from the `FrontDL3/` submodule |
+| `Dockerfile.gee-download` | Stage 1 download. Deviations 2–5 via `gee-landsat8-patch.py`, 6 via `gee-resume-patch.py` |
+| `Dockerfile.preprocess` | Stage 2 on ubuntu:18.04. `preprocess-entrypoint.sh` builds the layout; `preprocess-seed-para.sh` is deviation 2 |
+| `Dockerfile.stage3`, `stage3-host.sh` | Stage 3 (CPU or GPU build) and its host runner |
+| `vendor/intersect/` | Vendored `intersect.py` for truncation |
+| `tools/data_viewer/` | Read-only web viewer for stage 2/3 output |
+| `IMPLEMENTATION_PLAN.md` | Step-by-step Phase 1 log and decisions |
 | `Dockerfile` | Empty, zero bytes |
 | `pyproject.toml` | Declares the `autoterm` package with an empty dependency list |
 | `README.md` | One line per directory |
 | `LICENSE` | MIT |
 | `.gitmodules` | Registers `FrontDL3` |
 
-There is no `.gitignore`. Compiled Python artifacts (`*.pyc` and `__pycache__/` from Python 3.6 and
+`.gitignore` covers `downloads/`, `out/`, `tier-b/`, `tier-c/`, `GEE/GID*/`, `.env/` and local Claude settings. Compiled Python artifacts (`*.pyc` and `__pycache__/` from Python 3.6 and
 3.8) are committed throughout `pytorch-deeplab-xception/`.
 
 ## `downloads/`
