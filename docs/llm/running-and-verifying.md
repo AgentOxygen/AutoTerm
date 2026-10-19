@@ -172,6 +172,88 @@ docker run --rm --gpus all \
 image and 112 per Sentinel image, about 249k for GID278. Each patch costs 982 GFLOP (FlopCounterMode). GPU
 and CPU traces agree to within one pixel (TF32); `-e NVIDIA_TF32_OVERRIDE=0` makes them identical.
 
+### Golden reference (smallest reproducible case)
+
+`golden/` holds byte-for-byte reference outputs for two fixed GID278 subsets (8 and 24 images, May5
+checkpoint), with `golden/verify-golden.sh <8|24> <data dir>` and `./gpu-smoke.sh [8|24]` (host GPU run
+plus verification). Read `golden/README.md`. Use it before any full run, and as the integrity check
+for v2. Run with `NVIDIA_TF32_OVERRIDE=0` on a GPU for a byte-exact match.
+
+### Stage 3 under Apptainer (the 8× L40S cluster)
+
+The cluster runs containers only through Apptainer `.sif` files. **Verified 2026-10-07** in the
+sandbox (Apptainer 1.4.5, `.sif` built from the CPU `autoterm-stage3`, the same 8 images as
+`tier-c/smoke-script/`): every driver step ran, and all 58 trace/text outputs were byte-identical
+to the Docker run. Same log noise, plus one Ghostscript `Error: /undefined in A`, which the Docker
+smoke run also had.
+
+Three things differ from Docker, and the commands below handle each one:
+
+1. **The image is read-only.** The driver writes into its working root (`list/`, `post_process_*`,
+   `in_polygon_gmt`, `gmt.conf`), so the working root is copied out of the `.sif` once and bound
+   back over itself. The copy is the image's own files, unchanged.
+2. **`WORKDIR` is ignored.** Without `--pwd` the driver starts in `$HOME` and cannot find `para.ini`.
+3. **Host environment leaks in.** `--cleanenv --containall` keeps cluster modules (`PYTHONPATH`,
+   `LD_LIBRARY_PATH`) and `$HOME` out.
+
+**The L40S machine needs its own image.** Its driver is 570.207 (CUDA 12.8 at most), so the cu130
+image cannot start there. `TORCH_CUDA=cu126` builds the same torch 2.14.0 and torchvision 0.29.0
+for CUDA 12.6 (kernels sm_50 to sm_90; the L40S is sm_89 and runs the sm_86 code). That build cannot
+target the RTX 5070, so the 5070 keeps the cu130 image. Build on the host, because the sandbox can't
+reach `pypi.nvidia.com`:
+
+```bash
+docker build -f Dockerfile.frontdl3 --build-arg TORCH_CUDA=cu126 -t frontdl3-cu126 .
+docker build -f Dockerfile.stage3 --build-arg BASE=frontdl3-cu126 --build-arg DEVICE=cuda \
+  --build-arg GPU_ARCH=sm_89 -t autoterm-stage3-gpu-cu126 .
+apptainer build autoterm-stage3-gpu-cu126.sif docker-daemon://autoterm-stage3-gpu-cu126:latest
+# or, without apptainer on the host: docker save autoterm-stage3-gpu-cu126 -o stage3-gpu-cu126.tar,
+# copy it over, then: apptainer build autoterm-stage3-gpu-cu126.sif docker-archive://stage3-gpu-cu126.tar
+```
+
+Run one checkpoint. Each run needs its **own copy of the data**, because the driver writes
+non-namespaced files into it (for example `truncate_termini/temp.txt`). Stage 3 never reads
+`after_merge/`, so leaving it out cuts the GID278 upload from 39 GB to about 11 GB
+(`rsync -a --exclude after_merge tier-c/data/ <dest>/`).
+
+```bash
+SIF=$PWD/autoterm-stage3-gpu-cu126.sif
+CKPT=drn54_May5_2022_0.001_batch16_keep_augmentation.tar
+RUN=$PWD/run-May5                    # holds data/ (the copy), work/, scratch/
+mkdir -p "${RUN:?}/work" "$RUN/scratch/test_output" "$RUN/scratch/post_output"
+apptainer exec --containall --bind "$RUN/work:/mnt" "${SIF:?}" cp -a /home/staff/enze/Front_DL3/. /mnt/
+mkdir -p "$RUN/work/test_output" "$RUN/work/post_output"     # mount points for the scratch binds
+cp "${CKPT:?}" "$RUN/work/"
+apptainer exec --nv --cleanenv --containall \
+  --bind "$RUN/data:/home/staff/enze/data1/Greenland_front_Mapping/data" \
+  --bind "$RUN/work:/home/staff/enze/Front_DL3" \
+  --bind "$RUN/scratch/test_output:/home/staff/enze/Front_DL3/test_output" \
+  --bind "$RUN/scratch/post_output:/home/staff/enze/Front_DL3/post_output" \
+  --pwd /home/staff/enze/Front_DL3 \
+  "$SIF" bash batch_inference_plot_mv_figure_dir.sh "$CKPT" > "$RUN/run.log" 2>&1
+```
+
+- **GPU selection: the `BASH_ENV` pin (verified 2026-10-07).** `exe_inference.sh` line 3 sets
+  `CUDA_VISIBLE_DEVICES=0` itself. The L40S machine has no scheduler, plain `--nv` exposes all 8 GPUs
+  (even with `--contain`), and `nvidia-container-cli` (needed for `--nvccli` isolation) is not
+  installed. So the run puts a one-line file in the working root and points `BASH_ENV` at it.
+  Every non-interactive bash reads that file first, so the variable is read-only by the time line 3
+  runs: the export fails with `CUDA_VISIBLE_DEVICES: readonly variable` (log noise, once per batch),
+  and the script continues on the chosen GPU. No source file changes; only which identical GPU runs
+  the job. Checked on the node (torch saw 1 device, UUID of physical GPU 3), and on CPU: the
+  8-image Apptainer run with `BASH_ENV` was byte-identical (99 files) to the run without it, and to
+  Docker's (58 trace/text files). Add to the setup and the run:
+
+  ```bash
+  echo "readonly CUDA_VISIBLE_DEVICES=${GPU:?}; export CUDA_VISIBLE_DEVICES" > "$RUN/work/gpu-select.sh"
+  # in the apptainer exec line:
+  #   --env BASH_ENV=/home/staff/enze/Front_DL3/gpu-select.sh
+  ```
+- **Parallelism.** One glacier is one serial driver run. Do not split it by sensor: screening counts
+  abandonments across all four sensors, and the Sentinel-1 test borrows Sentinel-2's IQR. The 8 GPUs
+  help by running checkpoints (and later glaciers) side by side.
+- Files are written as the calling user, so no `chown` is needed.
+
 ## Failure modes that do not raise
 
 These produce empty or wrong output with a success exit code. Check for them explicitly.

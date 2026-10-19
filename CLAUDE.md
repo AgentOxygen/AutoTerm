@@ -49,6 +49,15 @@ sudo chown -R $USER: tier-c     # afterwards: the container writes as root
 - Harmless log noise: `rm: cannot remove 'test_output': Device or resource busy` and `mkdir: … File
   exists` (from the mounts), `ls: cannot access '…bed_GID278_??.gmt'` (no bed polygons, by design), and
   one `find_min_max.py` IndexError (figure only).
+- **Alternative (2026-10-07): the user's 8× L40S cluster, through Apptainer.** The `.sif` path was verified in
+  the sandbox: on CPU, its 8-image outputs were byte-identical to Docker's. Commands and the three Docker
+  differences (read-only image, `--pwd`, `--cleanenv`) are in `docs/llm/running-and-verifying.md`, "Stage 3
+  under Apptainer". The machine has driver 570.207 (CUDA 12.8 at most) and no scheduler. Hence the
+  `TORCH_CUDA=cu126` / `GPU_ARCH=sm_89` build (`autoterm-stage3-gpu-cu126`, same torch 2.14.0, not yet built). The cu126
+  image was built and torch ran a conv on the L40S. No `nvidia-container-cli` there, so the GPU is chosen
+  with a `BASH_ENV` file that makes `CUDA_VISIBLE_DEVICES` read-only (verified on the node and
+  byte-identical on CPU). The user is now testing the run commands on the node (repo at `/scratch1/persad/AutoTerm`,
+  runs under `/scratch1/persad/runs/`).
 - `./stage3-host.sh` does the same, plus a GPU preflight and an output-count check. The user found it
   too complex, so they run the plain commands above. Keep both working.
 - A user's first "single image" attempt ran all 353 Landsat images: `$IMG` was empty, so the whole
@@ -115,6 +124,10 @@ the user's feedback on the first real view.
 - Patch scratch inside Docker can fill the disk.
 
 `Dockerfile.preprocess` and `Dockerfile.stage3` now fail their builds if any required tool is missing.
+
+**Golden set (2026-10-19):** `golden/` is the smallest reproducible case (8 and 24 images, byte-exact).
+The 5070 matched `golden-24` exactly with TF32 off. Verify with `./gpu-smoke.sh [8|24]` or
+`golden/verify-golden.sh`. It comes before the full run, which stays the C4/Mar8 check.
 
 ## The current task
 

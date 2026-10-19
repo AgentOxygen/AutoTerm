@@ -18,6 +18,11 @@
 #     docker build -f Dockerfile.stage3 --build-arg BASE=frontdl3 --build-arg DEVICE=cuda \
 #       -t autoterm-stage3-gpu .
 #
+#   GPU, 8x L40S machine (sm_89, driver 570, run through Apptainer; see docs/llm/running-and-verifying.md):
+#     docker build -f Dockerfile.frontdl3 --build-arg TORCH_CUDA=cu126 -t frontdl3-cu126 .
+#     docker build -f Dockerfile.stage3 --build-arg BASE=frontdl3-cu126 --build-arg DEVICE=cuda \
+#       --build-arg GPU_ARCH=sm_89 -t autoterm-stage3-gpu-cu126 .
+#
 # Run. The stage 2 data directory (Dockerfile.preprocess) is mounted read-write, and the
 # checkpoint is mounted read-only into the working root, where the driver expects it. For the GPU
 # image, add --gpus all:
@@ -81,13 +86,20 @@ ENV PATH=$W/data_processing:$PATH
 #    This is the same deviation as Dockerfile.frontdl3-cpu's deviation 1, applied to the repo's copy
 #    of the script that this working root uses (identical to the author's,
 #    downloads/enze/Front_DL3/exe_inference.sh). The GPU build keeps the script as is, and instead
-#    checks that its torch can target sm_120 (CUDA >= 12.8).
+#    checks that torch carries kernels for the target GPU: GPU_ARCH itself, or a lower one of the
+#    same major version (sm_86 code runs on sm_89). sm_120 is the RTX 5070 (cu130), sm_89 the L40S
+#    (cu126). The compiled arch list is read without a GPU, so the check runs at build time.
+ARG GPU_ARCH=sm_120
 RUN if [ "$DEVICE" = cpu ]; then \
         sed -i '/^\s*python .*inference\.py/s/ --cuda / /' $W/exe_inference.sh \
         && ! grep -qE '^\s*python .*inference\.py.* --cuda ' $W/exe_inference.sh; \
     else \
         grep -qE '^\s*python .*inference\.py.* --cuda ' $W/exe_inference.sh \
-        && python -c "import torch; v=torch.version.cuda; assert v and tuple(map(int, v.split('.')[:2])) >= (12, 8), v; print('torch', torch.__version__, 'cuda', v)"; \
+        && python -c "import re, torch; \
+t = int(re.sub(r'\D', '', '$GPU_ARCH')); flags = torch._C._cuda_getArchFlags(); \
+archs = [int(re.sub(r'\D', '', a)) for a in flags.split() if a.startswith('sm_')]; \
+print('torch', torch.__version__, 'cuda', torch.version.cuda, 'archs', flags, 'target', '$GPU_ARCH'); \
+assert any(a // 10 == t // 10 and a <= t for a in archs), 'torch has no kernels for $GPU_ARCH'"; \
     fi
 # 2. intersect.py is vendored (vendor/intersect/README.md: sukhbinder/intersection @ cbf072fc1a, the
 #    only upstream revision with this name and a two-value return). truncate_termini.py imports it

@@ -30,8 +30,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # The target GPU (RTX 5070) is sm_120, which needs CUDA >= 12.8. cu130 is used because it carries
 # torch 2.14.0, the version the CPU image pins (the cu128 channel stops at torch 2.11). Host
 # requirement: an NVIDIA driver that supports CUDA 13.0 (R580 or newer).
+# TORCH_CUDA=cu126 is the build for the 8x L40S machine (sm_89, driver 570 = CUDA 12.8 at most):
+# the same torch 2.14.0 / torchvision 0.29.0, compiled for sm_50..sm_90 (sm_86 code runs on sm_89).
+# It cannot target the RTX 5070. Only torch's CUDA variant differs between the two builds.
+ARG TORCH_CUDA=cu130
 RUN pip install --no-cache-dir --break-system-packages \
-        torch==2.14.0 torchvision==0.29.0 --index-url https://download.pytorch.org/whl/cu130
+        torch==2.14.0 torchvision==0.29.0 --index-url https://download.pytorch.org/whl/${TORCH_CUDA}
 # Versions pinned to the stack the C3 smoke test ran on (2026-10-05).
 RUN pip install --no-cache-dir --break-system-packages \
         rasterio==1.5.1 shapely==2.1.2 pyshp==3.1.6 pyproj==3.8.0 matplotlib==3.11.2 scipy==1.18.1 \
