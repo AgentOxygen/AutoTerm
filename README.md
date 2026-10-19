@@ -1,4 +1,10 @@
 # AutoTerm
+
+### Running the Viewer:
+```bash
+docker run --rm -p 8001:8080   -v "$PWD/tier-c/smoke/data:/data:ro"   -v "$PWD/downloads/Termini.zip:/published/Termini.zip:ro"   autoterm-viewer
+```
+
 ### batch_preprocess_images
 
 code for batch preprocessing images including cropping, histogram normalization, upsample, remove partial images

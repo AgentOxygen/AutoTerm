@@ -1,0 +1,101 @@
+# Tier C, step C1b (IMPLEMENTATION_PLAN.md): stage 2 image preprocessing, run from the unmodified
+# batch_preprocess_images/ scripts in the layout the author's procedure (AutoTerm Pipeline.docx,
+# Step 3) describes. Stage 1 (GEE download) is Dockerfile.gee-download. Stage 3 is not built yet.
+#
+#   docker build -f Dockerfile.preprocess -t autoterm-preprocess .
+#
+# Run. The data directory is a read-write host dir, and the GEE downloads are mounted read-only.
+# The downloads are never written to: original_image/ holds symlinks to them (see
+# preprocess-entrypoint.sh):
+#   docker run --rm \
+#     -v "$PWD/tier-c/data:/home/staff/enze/data1/Greenland_front_Mapping/data" \
+#     -v "$PWD/GEE:/gee:ro" \
+#     autoterm-preprocess bash <script>
+#
+# For a glacier with Landsat-8, seed para.ini first (deviation 2), then run the author's drivers
+# unmodified, one per container, in batch_preprocess_images/haha.sh order:
+#   bash /opt/autoterm/preprocess-seed-para.sh 278
+#   bash batch_read_box_process.sh
+#   bash batch_remove_partial_images.sh
+#   bash batch_upsample.sh
+#   bash batch_generate_para_upsample.sh
+#   bash batch_generate_truncating_polygon.sh
+#
+# For a glacier with no Landsat-8 imagery, `bash /opt/autoterm/preprocess-sentinel.sh <n>` stands in
+# for batch_read_box_process.sh (deviation 1) and then runs batch_remove_partial_images.sh. It cannot
+# get past upsampling, which needs Landsat-8. GID278 no longer uses it.
+#
+# Base image: ubuntu:18.04, deliberately old. The stretch step calls gdal_contrast_stretch
+# (dans-gdal-scripts). That tool is packaged in bionic but absent from focal, jammy, and the
+# osgeo/gdal image that Dockerfile.frontdl3-cpu uses (all checked 2026-09-30). Bionic's GDAL
+# 2.2.3 / Python 3.6 / NumPy 1.13 is also closer to the author's 2022 environment than a current
+# stack. This is an environment choice, not a source deviation.
+FROM ubuntu:18.04
+
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        dans-gdal-scripts gdal-bin python-gdal gmt bc \
+        python3 python3-numpy python3-pil python3-imageio \
+    && rm -rf /var/lib/apt/lists/*
+# python-gdal (the Python 2 binding) is what ships gdal_merge.py in bionic. python3-gdal does not.
+# Without gdal_merge.py, every same-date merge in batch_process_Sentinel-*_images.sh fails with
+# "command not found". The script then deletes the _1/_2 parts anyway, so each multi-scene date
+# disappears while the run exits 0 (observed on the first GID278 attempt: 46 of 471 Sentinel-2
+# dates lost). The check below fails the build instead if any tool a stage 2 script calls is absent.
+
+# Every stage 2 script invokes a bare `python`. Bionic has no such command, and the scripts are
+# py3-clean. This is the same treatment Dockerfile.frontdl3 gives `python2`.
+RUN ln -s /usr/bin/python3 /usr/local/bin/python
+RUN for t in gdalwarp gdal_translate gdal_merge.py gdal_contrast_stretch ogr2ogr gmt bc python; do \
+        command -v "$t" >/dev/null || { echo "missing tool: $t" >&2; exit 1; }; done \
+    && python -c 'import numpy, imageio, PIL' \
+    && gdal_merge.py 2>&1 | grep -q '^Usage: gdal_merge.py'
+
+# Layout from the author's procedure (Step 1/3): Front_DL3/script supplies parameters.py (+ its
+# basic_src package); Front_DL3/data_processing is on PATH so `bash batch_stretch.sh` resolves
+# there. That copy is the one using `-histeq 100`. FrontDL3/pre-processing/batch_stretch.sh uses
+# `-histeq 20`, but the procedure puts data_processing on PATH, so the pre-processing copy is not
+# the one that runs. The root data_processing/ copy is byte-identical to the author's
+# downloads/enze/Front_DL3/data_processing/batch_stretch.sh.
+COPY FrontDL3/script/ /home/staff/enze/Front_DL3/script/
+COPY data_processing/ /home/staff/enze/Front_DL3/data_processing/
+ENV PATH=/home/staff/enze/Front_DL3/data_processing:$PATH
+
+# The procedure copies the stage 2 scripts and get_roi.py, get_imagesize.py, and
+# remove_partial_images.py "into the data directory". The data directory is a runtime mount, so
+# the entrypoint copies these in (without overwriting) when the container starts.
+COPY batch_preprocess_images/ /opt/autoterm/batch_preprocess_images/
+COPY FrontDL3/build_folder_structure.sh /opt/autoterm/build_folder_structure.sh
+COPY preprocess-entrypoint.sh /opt/autoterm/entrypoint.sh
+COPY preprocess-sentinel.sh /opt/autoterm/preprocess-sentinel.sh
+COPY preprocess-seed-para.sh /opt/autoterm/preprocess-seed-para.sh
+RUN chmod +x /opt/autoterm/entrypoint.sh
+
+# --- deviations from the original source, deliberately confined to this file ---
+# 1. Sentinel-only run of batch_process.sh. batch_read_box_process.sh writes the image sizes into
+#    para.ini and calls batch_process.sh only when GID_<n>_Landsat-8/original_image is non-empty.
+#    Otherwise it `continue`s, having written a partial para.ini (GID and ROI only), and exits 0
+#    with nothing processed (observed 2026-09-30, GID278). The GEE script as committed has its
+#    Landsat blocks commented out, so a Sentinel-only glacier never passes that gate. This makes a
+#    copy of the driver without its Landsat-8 lines. The remaining Sentinel lines are byte-identical
+#    and read the same positional args ($1-$5 ROI, $8/$9 = x_size_S/y_size_S; $6/$7 are the unused
+#    Landsat sizes). Run it as
+#      bash batch_process_sentinel.sh <n> xmin ymin xmax ymax - - x_size_S y_size_S
+#    with x_size_S/y_size_S from get_imagesize.py on the first Sentinel-2 original_image, the same
+#    command batch_read_box_process.sh uses. The original batch_process.sh is left untouched.
+RUN grep -v 'Landsat-8' /opt/autoterm/batch_preprocess_images/batch_process.sh \
+        > /opt/autoterm/batch_preprocess_images/batch_process_sentinel.sh
+# 2. Seeded para.ini (user-approved 2026-10-05). batch_read_box_process.sh takes x_size_L/y_size_L
+#    from the first Landsat-8 original_image (`find | head -n 1`). For GID278 that file is
+#    LC08_007012_20130429.B8.tif, a 172x417 clip of a scene that only grazes the ROI, so every
+#    Landsat-8 scene would be warped to ~83 m pixels and then upsampled 6x. The published GID278
+#    Landsat8 traces have a median vertex spacing of 8.1 m. A 980x1248 grid upsampled 2x predicts
+#    8.1 m; the 172x417 grid predicts 15.3 m. The same check on Sentinel (1469x1872: 10.8 m
+#    predicted and measured) validates the method. preprocess-seed-para.sh writes para.ini with the
+#    driver's own lines and helpers, but reads the Landsat-8 size from the first scene whose size
+#    is the most common one (980x1248, 261 of 604 GID278 scenes). The driver finds para.ini, skips
+#    writing its own, and runs batch_process.sh with it. No script is edited. Every downstream
+#    Landsat-8 size (upsample factor 2, para_upsample.ini) follows from this value.
+
+WORKDIR /home/staff/enze/data1/Greenland_front_Mapping/data
+ENTRYPOINT ["/opt/autoterm/entrypoint.sh"]
+CMD ["bash"]

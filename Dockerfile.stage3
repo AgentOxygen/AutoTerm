@@ -1,0 +1,125 @@
+# Tier C, step C3 (IMPLEMENTATION_PLAN.md): stage 3, terminus inference, truncation, screening,
+# duplicate removal, the Sentinel-1 offset, and error calculation. It runs the repo's
+# batch_inference_termini/batch_inference_plot_mv_figure_dir.sh unmodified, in the working-root
+# layout the author's procedure describes (AutoTerm Pipeline.docx, Step 4).
+#
+# Two builds from this one file, selected by build args:
+#
+#   CPU (default; this sandbox has no GPU). It builds on the Tier A CPU image, which carries the CPU
+#   torch stack and the submodule's CPU-capable inference code:
+#     docker build -f Dockerfile.frontdl3-cpu -t frontdl3-cpu .
+#     docker build -f Dockerfile.stage3 -t autoterm-stage3 .
+#
+#   GPU (the host's RTX 5070, sm_120). It builds on the GPU baseline image (upstream FrontDL3 at a
+#   pinned commit, torch 2.14.0+cu130). The author's exe_inference.sh already passes --cuda with
+#   CUDA_VISIBLE_DEVICES=0, so this build needs no inference deviation at all. stage3-host.sh does
+#   all of this, plus a GPU preflight and an output check:
+#     docker build -f Dockerfile.frontdl3 -t frontdl3 .
+#     docker build -f Dockerfile.stage3 --build-arg BASE=frontdl3 --build-arg DEVICE=cuda \
+#       -t autoterm-stage3-gpu .
+#
+#   GPU, 8x L40S machine (sm_89, driver 570, run through Apptainer; see docs/llm/running-and-verifying.md):
+#     docker build -f Dockerfile.frontdl3 --build-arg TORCH_CUDA=cu126 -t frontdl3-cu126 .
+#     docker build -f Dockerfile.stage3 --build-arg BASE=frontdl3-cu126 --build-arg DEVICE=cuda \
+#       --build-arg GPU_ARCH=sm_89 -t autoterm-stage3-gpu-cu126 .
+#
+# Run. The stage 2 data directory (Dockerfile.preprocess) is mounted read-write, and the
+# checkpoint is mounted read-only into the working root, where the driver expects it. For the GPU
+# image, add --gpus all:
+#   docker run --rm \
+#     -v "$PWD/tier-c/data:/home/staff/enze/data1/Greenland_front_Mapping/data" \
+#     -v "$PWD/downloads/drn54_May5_2022_0.001_batch16_keep_augmentation.tar:/home/staff/enze/Front_DL3/drn54_May5_2022_0.001_batch16_keep_augmentation.tar:ro" \
+#     autoterm-stage3 bash batch_inference_plot_mv_figure_dir.sh drn54_May5_2022_0.001_batch16_keep_augmentation.tar
+#
+# Decisions behind this layout (user-approved 2026-10-05, evidence in IMPLEMENTATION_PLAN.md, "C2,
+# evidence" and "C2c findings"):
+# - Driver: the repo's batch_inference_termini/ copy (3 length/smoothness iterations, as in the
+#   author's March 2023 production logs), not the author's later working copy.
+# - No bedrock polygons. Nothing is served at bed_path
+#   (/home/staff/enze/data1/ice_mask/GIMP/crop_bed/buffer_15). truncate_termini.py then writes
+#   every trace through unchanged, which matches the published GID278 traces: their ends lie on the
+#   cutting box, not on the fjord walls. This is an absent asset, not a source deviation.
+# - Cutting polygon: the driver falls back to stage 2's GID_<n>_cutting_polygon_shrink.gmt, which is
+#   what the author used for GID278 (published trace ends lie on it, and log_Jun13.txt names it).
+ARG BASE=frontdl3-cpu
+FROM ${BASE}
+ARG DEVICE=cpu
+RUN case "$DEVICE" in cpu|cuda) ;; *) echo "DEVICE must be cpu or cuda, got: $DEVICE" >&2; exit 1;; esac
+
+# bc decides every screening abandonment (batch_abandon_results*.sh: `[ $(echo "$x > $t" | bc)
+# -eq 1 ]`). Without bc that test errors, comes out false, and nothing is ever abandoned, while the
+# run still exits 0. Ghostscript is what `gmt psconvert` uses to render the per-trace figures that
+# the screening steps move into abandon/ alongside the traces.
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        bc ghostscript \
+    && rm -rf /var/lib/apt/lists/*
+
+# Working root, assembled the way the procedure describes: the step scripts called by the driver sit
+# in Front_DL3 itself, script/ supplies parameters.py and the inference helpers, and
+# data_processing/ holds the helpers that the step scripts call by bare name.
+ENV W=/home/staff/enze/Front_DL3
+COPY batch_inference_termini/ $W/
+COPY FrontDL3/script/ $W/script/
+COPY data_processing/ $W/data_processing/
+COPY vendor/intersect/intersect.py $W/data_processing/intersect.py
+# The base image's network code, which exe_inference.sh calls at this absolute path. On CPU, that
+# is the submodule's code, patched by frontdl3-cpu (deviation 2, map_location). On GPU, it is upstream
+# FrontDL3 at the commit Dockerfile.frontdl3 pins, with that file's py3 deviations. Tier A
+# verified that both give the same 814-point trace.
+RUN ln -s /Front_DL3/pytorch-deeplab-xception $W/pytorch-deeplab-xception
+# para.ini: the submodule's copy differs from the author's (downloads/enze/Front_DL3/para.ini) only
+# in the three path keys, so set those to the author's values. All numeric parameters (patch
+# sizes, overlaps, crop sizes) are untouched.
+COPY FrontDL3/para.ini $W/para.ini
+RUN sed -i -e 's|^working_root *=.*|working_root =/home/staff/enze/Front_DL3|' \
+           -e 's|^data_path *=.*|data_path=/home/staff/enze/data1/Greenland_front_Mapping/data/|' \
+           -e 's|^codes_dir *=.*|codes_dir =/home/staff/enze/Front_DL3/script|' $W/para.ini
+# Default glacier list. Mount a different Glacier_ID_list_temp.txt over it to run other glaciers.
+RUN echo GID278 > $W/Glacier_ID_list_temp.txt
+# Step 3 of the procedure puts Front_DL3/data_processing on PATH. The step scripts depend on it: they
+# call batch_cal_complexity.sh, remove_duplicate.sh, merge_two_calving2.sh and others by bare
+# name, which bash looks up on PATH. Tier B ran without it and reported those helpers as missing.
+ENV PATH=$W/data_processing:$PATH
+
+# --- deviations from the original source, deliberately confined to this file ---
+# 1. CPU build only. exe_inference.sh passes --cuda unconditionally, and the CPU build has no GPU.
+#    This is the same deviation as Dockerfile.frontdl3-cpu's deviation 1, applied to the repo's copy
+#    of the script that this working root uses (identical to the author's,
+#    downloads/enze/Front_DL3/exe_inference.sh). The GPU build keeps the script as is, and instead
+#    checks that torch carries kernels for the target GPU: GPU_ARCH itself, or a lower one of the
+#    same major version (sm_86 code runs on sm_89). sm_120 is the RTX 5070 (cu130), sm_89 the L40S
+#    (cu126). The compiled arch list is read without a GPU, so the check runs at build time.
+ARG GPU_ARCH=sm_120
+RUN if [ "$DEVICE" = cpu ]; then \
+        sed -i '/^\s*python .*inference\.py/s/ --cuda / /' $W/exe_inference.sh \
+        && ! grep -qE '^\s*python .*inference\.py.* --cuda ' $W/exe_inference.sh; \
+    else \
+        grep -qE '^\s*python .*inference\.py.* --cuda ' $W/exe_inference.sh \
+        && python -c "import re, torch; \
+t = int(re.sub(r'\D', '', '$GPU_ARCH')); flags = torch._C._cuda_getArchFlags(); \
+archs = [int(re.sub(r'\D', '', a)) for a in flags.split() if a.startswith('sm_')]; \
+print('torch', torch.__version__, 'cuda', torch.version.cuda, 'archs', flags, 'target', '$GPU_ARCH'); \
+assert any(a // 10 == t // 10 and a <= t for a in archs), 'torch has no kernels for $GPU_ARCH'"; \
+    fi
+# 2. intersect.py is vendored (vendor/intersect/README.md: sukhbinder/intersection @ cbf072fc1a, the
+#    only upstream revision with this name and a two-value return). truncate_termini.py imports it
+#    from its own directory. NumPy 2 removed np.Inf; this is the same one-word change as upstream's
+#    later commit bb1348ba14.
+RUN sed -i 's/np\.Inf\b/np.inf/' $W/data_processing/intersect.py \
+    && ! grep -q 'np\.Inf\b' $W/data_processing/intersect.py
+
+# Fail the build if a tool the driver or its helpers call is missing. Every one of these fails
+# silently at run time.
+RUN for t in bc gs gmt gdal_calc.py gdal_polygonize.py gdal_translate ogr2ogr python python2 awk \
+             batch_cal_complexity.sh batch_cal_termini_length.sh batch_plot_result.sh remove_duplicate.sh \
+             merge_two_calving2.sh calculate_area2.sh split_data_by_name.sh plot_time_series.sh; do \
+        command -v "$t" >/dev/null || [ -f "$W/data_processing/$t" ] || { echo "missing tool: $t" >&2; exit 1; }; done
+# truncate_termini.py must import (Tier B: it crashed on `import intersect` for every trace), and
+# intersection() must return the two-value result it unpacks.
+RUN cd $W/data_processing && python -c "import sys; sys.argv=['t']; import truncate_termini" \
+    && python -c "import numpy as np; from intersect import intersection; \
+x, y = intersection(np.array([0., 1.]), np.array([0., 1.]), np.array([0., 1.]), np.array([1., 0.])); \
+assert abs(x[0] - 0.5) < 1e-9 and abs(y[0] - 0.5) < 1e-9, (x, y)"
+
+WORKDIR /home/staff/enze/Front_DL3
+CMD ["bash"]

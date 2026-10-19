@@ -1,0 +1,10 @@
+downloads/
+out/
+tier-b/
+tier-c/
+GEE/GID*/
+__pycache__/
+.env/
+.claude/settings.local.json
+GEE/batch_download_landsat8.py
+*.sif

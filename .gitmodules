@@ -1,0 +1,3 @@
+[submodule "FrontDL3"]
+	path = FrontDL3
+	url = git@github.com:AgentOxygen/FrontDL3.git
